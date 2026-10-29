@@ -39,11 +39,10 @@ def main(argv: list[str] | None = None) -> int:
         log.warning("starting without Widevine CDM: protected playback will fail")
     freeworld = detect_freeworld()
     if freeworld is False:
-        log.warning(
-            "qt6-qtwebengine-freeworld is not installed and no freeworld Qt6 "
-            "WebEngine build is published for Fedora 44 aarch64; if protected "
-            "playback fails, missing proprietary codecs is the likely cause"
-        )
+        # Verified 2026-10-29: stock QtWebEngine 6.11.2 decodes AAC and MP3
+        # (decodeAudioData OK), so this is informational only. Protected
+        # playback depends on the Widevine CDM + license, not this package.
+        log.info("qt6-qtwebengine-freeworld not installed (no Qt6 freeworld build published for F44 aarch64)")
 
     app = QApplication(argv)
     app.setApplicationName("Amazon Music Desktop")

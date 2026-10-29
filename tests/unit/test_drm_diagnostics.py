@@ -53,3 +53,35 @@ def test_configure_widevine_sets_env(tmp_path, monkeypatch):
     monkeypatch.delenv("QTWEBENGINE_CHROMIUM_FLAGS", raising=False)
     assert d.configure_widevine() == cdm
     assert f"--widevine-cdm-path={cdm}" in os.environ["QTWEBENGINE_CHROMIUM_FLAGS"]
+
+
+def test_parse_cdm_session_result_ok():
+    from amazon_music_desktop.browser.drm_diagnostics import parse_cdm_session_result
+    r = parse_cdm_session_result({"ok": True, "keySystem": "com.widevine.alpha"})
+    assert r.ok is True
+    assert r.stage == "C_cdm_session"
+
+
+def test_parse_cdm_session_result_fail():
+    from amazon_music_desktop.browser.drm_diagnostics import parse_cdm_session_result
+    r = parse_cdm_session_result({"ok": False, "error": "NotSupportedError: nope"})
+    assert r.ok is False
+    assert "NotSupportedError" in (r.error or "")
+    assert parse_cdm_session_result(None).ok is False
+
+
+def test_cdm_version(tmp_path):
+    import json
+
+    import amazon_music_desktop.browser.drm_diagnostics as d
+    assert isinstance(d.cdm_version(), str)
+    m = tmp_path / "manifest.json"
+    m.write_text(json.dumps({"version": "4.10.2662.3"}))
+    assert d.cdm_version(tmp_path / "libwidevinecdm.so") in ("4.10.2662.3", "unknown")
+
+
+def test_cdm_session_probe_js_shape():
+    from amazon_music_desktop.browser.drm_diagnostics import CDM_SESSION_PROBE_JS
+    assert "createMediaKeys" in CDM_SESSION_PROBE_JS
+    assert "createSession" in CDM_SESSION_PROBE_JS
+    assert "com.widevine.alpha" in CDM_SESSION_PROBE_JS

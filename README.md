@@ -31,7 +31,7 @@ A native desktop application for Amazon Music on Linux, built with Python 3, PyS
 Widevine is required for protected playback. The application does not bundle the proprietary CDM (licensing). Install it per distribution:
 
 - **Fedora / Fedora Asahi Remix**: `sudo dnf install widevine-installer` (provides `/var/lib/widevine/libwidevinecdm.so`). On Apple Silicon, the installer handles the 16K-page-size fixup.
-- **Fedora codecs note**: stock `qt6-qtwebengine` lacks some proprietary codecs. No `qt6-qtwebengine-freeworld` build is published for Fedora 44 aarch64, so if protected playback fails with an error after ~1 second, missing codecs is the likely cause with no repo fix currently available.
+- **Fedora codecs note**: AAC/MP3 decode verified working in stock `qt6-qtwebengine` 6.11.2. No `qt6-qtwebengine-freeworld` build is published for Fedora 44 aarch64 (and it isn't needed for audio). If protected playback fails after ~1 second, the cause is on the Widevine side — use **Diagnostics → Test CDM session** to check whether the CDM loads.
 - **Debian / Ubuntu**: install `chromium-widevine` (or Google Chrome) which provides a `WidevineCdm` directory under `~/.config/chromium` or `/usr/lib/chromium`.
 - **Arch Linux**: install `chromium-widevine` from the AUR, or `google-chrome`.
 
@@ -104,6 +104,17 @@ Or use the helper:
 | Logs | `~/.local/state/amazon-music-desktop/logs/` |
 
 Profile directories use `0700` permissions. Package removal does not delete user data.
+
+## Convert audio to MP3
+
+`scripts/convert-to-mp3.sh` converts local audio files (any ffmpeg-supported codec) to MP3:
+
+```bash
+./scripts/convert-to-mp3.sh song.flac song.ogg
+./scripts/convert-to-mp3.sh -b 256k -o ~/Music/mp3 *.m4a
+```
+
+It never overwrites (suffixed copies) and skips files already in MP3 unless `-f` is given. For local, user-owned files only — it cannot process DRM-protected streams.
 
 ## Testing
 

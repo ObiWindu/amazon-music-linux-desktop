@@ -18,6 +18,60 @@ CDM_PATH = Path("/var/lib/widevine/libwidevinecdm.so")
 WIDEVINE_CDM_DIR = Path("/var/lib/widevine/WidevineCdm")
 WIDEVINE_CDM_FLAG = "--widevine-cdm-path"
 
+# JS probe: goes one step beyond key-system detection by creating MediaKeys
+# and a MediaKeySession, which forces Chromium to instantiate the CDM.
+# Success => CDM loads. Failure here (while key-system detection passes)
+# => CDM rejected/incompatible. License failures happen later, server-side.
+CDM_SESSION_PROBE_JS = (
+    "(async () => {"
+    "try {"
+    "const access = await navigator.requestMediaKeySystemAccess("
+    "'com.widevine.alpha', [{"
+    "initDataTypes: ['cenc'],"
+    "audioCapabilities: [{contentType: 'audio/mp4; codecs=\"mp4a.40.2\"'}],"
+    "videoCapabilities: [{contentType: 'video/mp4; codecs=\"avc1.42E01E\"'}]"
+    "}]);"
+    "const keys = await access.createMediaKeys();"
+    "const session = keys.createSession();"
+    "if (!session) throw new Error('createSession returned null');"
+    "return {ok: true, keySystem: access.keySystem};"
+    "} catch (e) { return {ok: false, error: (e && e.name ? e.name + ': ' : '') + (e && e.message ? e.message : e)}; }"
+    "})()"
+)
+
+
+def parse_cdm_session_result(result: object) -> StageResult:
+    """Normalize the CDM session probe callback payload."""
+    if isinstance(result, dict) and result.get("ok") is True:
+        return StageResult(
+            "C_cdm_session", True, {"keySystem": result.get("keySystem", "?")}
+        )
+    error = "no result"
+    if isinstance(result, dict):
+        error = str(result.get("error", "unknown"))
+    return StageResult("C_cdm_session", False, {}, error)
+
+
+def cdm_version(cdm: Path | None = None) -> str:
+    """Read the CDM version from the neighboring manifest.json."""
+    base = cdm or CDM_PATH
+    for manifest in (
+        base.parent / "manifest.json",
+        WIDEVINE_CDM_DIR / "manifest.json",
+        Path.home() / ".config" / "chromium" / "WidevineCdm" / "manifest.json",
+    ):
+        try:
+            if manifest.exists():
+                import json
+
+                data = json.loads(manifest.read_text())
+                if isinstance(data.get("version"), str):
+                    return data["version"]
+        except Exception as exc:
+            log.debug("could not read %s: %s", manifest, exc)
+            continue
+    return "unknown"
+
 
 def _user_cdm_candidates() -> list[Path]:
     home = Path.home()
