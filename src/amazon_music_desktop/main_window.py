@@ -39,6 +39,9 @@ class WebPage(QWebEnginePage):
         super().__init__(profile, parent)
         self.policy = policy
 
+    def javaScriptConsoleMessage(self, level, message, line, source):
+        log.info("JS console: %s %s (line %s)", level, message, line)
+
     def acceptNavigationRequest(self, url, nav_type, is_main_frame):
         decision = self.policy.decide(url.toString())
         if decision == NavigationDecision.BLOCK:
@@ -321,11 +324,11 @@ class MainWindow(QMainWindow):
 
     def _player_js(self, action: str) -> None:
         js = {
-            "previous": "document.querySelector('[aria-label*=\"Previous\"]')?.click();",
-            "play": "document.querySelector('[aria-label*=\"Play\"],[aria-label*=\"Pause\"]')?.click();",
-            "next": "document.querySelector('[aria-label*=\"Next\"]')?.click();",
-            "shuffle": "document.querySelector('[aria-label*=\"Shuffle\"]')?.click();",
-            "repeat": "document.querySelector('[aria-label*=\"Repeat\"]')?.click();",
+            "previous": "document.querySelector('[aria-label*=\"Previous\"], [data-testid*=\"previous\"]')?.click();",
+            "play": "document.querySelector('[aria-label*=\"Play\"],[aria-label*=\"Pause\"], [data-testid*=\"play\"]')?.click();",
+            "next": "document.querySelector('[aria-label*=\"Next\"], [data-testid*=\"next\"]')?.click();",
+            "shuffle": "document.querySelector('[aria-label*=\"Shuffle\"], [data-testid*=\"shuffle\"]')?.click();",
+            "repeat": "document.querySelector('[aria-label*=\"Repeat\"], [data-testid*=\"repeat\"]')?.click();",
         }.get(action, "")
         if js:
             self.view.page().runJavaScript(js)

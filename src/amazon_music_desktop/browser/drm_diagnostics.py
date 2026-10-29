@@ -134,8 +134,19 @@ def ensure_widevine_user_dir() -> None:
             sub = target / "_platform_specific" / "linux_x64"
             sub.mkdir(parents=True, exist_ok=True)
             manifest_src = Path("/var/lib/widevine/WidevineCdm/manifest.json")
-            if manifest_src.exists() and not (target / "manifest.json").exists():
-                (target / "manifest.json").write_text(manifest_src.read_text())
+            if not (target / "manifest.json").exists():
+                import json
+                manifest = {}
+                if manifest_src.exists():
+                    try:
+                        manifest = json.loads(manifest_src.read_text())
+                    except Exception:
+                        manifest = {}
+                # add linux platform entry so Qt/Chromium can discover the CDM
+                platforms = manifest.setdefault("platforms", [])
+                if not any(p.get("os") == "linux" for p in platforms):
+                    platforms.append({"os": "linux", "arch": "x64", "sub_package_path": "_platform_specific/linux_x64/"})
+                (target / "manifest.json").write_text(json.dumps(manifest, indent=2))
             link = sub / "libwidevinecdm.so"
             if not link.exists():
                 try:
