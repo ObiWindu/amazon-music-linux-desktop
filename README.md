@@ -31,7 +31,7 @@ A native desktop application for Amazon Music on Linux, built with Python 3, PyS
 Widevine is required for protected playback. The application does not bundle the proprietary CDM (licensing). Install it per distribution:
 
 - **Fedora / Fedora Asahi Remix**: `sudo dnf install widevine-installer` (provides `/var/lib/widevine/libwidevinecdm.so`). On Apple Silicon, the installer handles the 16K-page-size fixup.
-- **Fedora codecs note**: AAC/MP3 decode verified working in stock `qt6-qtwebengine` 6.11.2. No `qt6-qtwebengine-freeworld` build is published for Fedora 44 aarch64 (and it isn't needed for audio). If protected playback fails after ~1 second, the cause is on the Widevine side — use **Diagnostics → Test CDM session** to check whether the CDM loads.
+- **Fedora codecs note**: AAC/MP3 decode verified working in stock `qt6-qtwebengine` 6.11.2. On Fedora the freeworld codec library is `libavcodec-freeworld` (RPM Fusion free); no `qt6-qtwebengine-freeworld` build is published for Fedora 44 aarch64, and it isn't needed for in-app audio. If protected playback fails after ~1 second, the cause is on the Widevine side — use **Diagnostics → Test CDM session** to check whether the CDM loads.
 - **Debian / Ubuntu**: install `chromium-widevine` (or Google Chrome) which provides a `WidevineCdm` directory under `~/.config/chromium` or `/usr/lib/chromium`.
 - **Arch Linux**: install `chromium-widevine` from the AUR, or `google-chrome`.
 
@@ -116,6 +116,8 @@ Profile directories use `0700` permissions. Package removal does not delete user
 
 It never overwrites (suffixed copies) and skips files already in MP3 unless `-f` is given. For local, user-owned files only — it cannot process DRM-protected streams.
 
+On Fedora, install the full codec library from RPM Fusion free so the `ffmpeg` CLI can decode all formats: `sudo dnf install ffmpeg libavcodec-freeworld` (requires the RPM Fusion free repo). Stock Fedora ships `ffmpeg-free`/`libavcodec-free`, which lacks some codecs.
+
 ## Testing
 
 ```bash
@@ -169,7 +171,9 @@ See `docs/SECURITY.md`. Highlights:
 ## Widevine / DRM limitations
 
 - Detection of EME or `com.widevine.alpha` does not guarantee playback.
-- Actual protected playback requires a valid Amazon account and subscription; not verified in this environment.
+- Observed behavior on Fedora Asahi (AArch64): playback starts (~1s of audio), then the page stops the stream. A captured Chromium verbose log shows the sequence: audio starts → Amazon requests the DRM license (`music.amazon.fr/ZAZ/api/dmls/`) → `DrmControllerImpl` errors → stream closed, one retry, then give-up. This is Amazon's license service rejecting the request for the only ARM64 Linux CDM available (4.10.2662.3, 2022 — the last build published for this architecture). It is a server-side decision, not a codec, player-UI, or app issue.
+- The Amazon web player bar is never shown: the web view is docked so its bottom strip (where the page's player bar renders) is outside the visible window. The page player itself is left completely untouched — no CSS, DOM, or layout modification — because touching it correlated with playback teardowns. The native bottom bar is the only visible player surface.
+- Actual protected playback requires a valid Amazon account and subscription.
 - See `docs/DRM_COMPATIBILITY.md` and `evidence/DRM_REPORT.md`.
 
 ## Troubleshooting

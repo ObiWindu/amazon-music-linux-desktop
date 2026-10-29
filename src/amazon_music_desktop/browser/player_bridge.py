@@ -5,52 +5,17 @@ media pipeline. There is no independent native audio path, so the native
 buttons DRIVE the page player via JavaScript and the native bar MIRRORS the
 page state (polled from the <audio> element + document.title).
 
-Visual minimization must never use ``display:none``, ``visibility:hidden``,
-node removal, or broad selectors (``footer``, ``[class*="player"]``): ripping
-the player UI out of layout breaks Amazon's PlaybackAdapter and kills audio
-after ~1s. Instead we collapse only the bottom-docked bar in a
-layout-preserving way, and never touch elements containing audio/video.
+This module must never mutate the page's player DOM. Earlier attempts to
+hide or shrink the web player bar via CSS (display:none, then a
+layout-preserving collapse) coincided with playback teardowns ~1s after
+start. The page player is instead kept fully laid out and functional but
+rendered outside the visible window by ``main_window._BrowserHost``: the
+native bar is the only player surface visible or clickable in the app.
 """
 
 from __future__ import annotations
 
 from typing import Any
-
-MINIMIZED_BAR_CLASS = "amd-minimized-player-bar"
-
-# Layout-preserving: element stays in DOM and keeps its box (no display:none,
-# no visibility:hidden), so page JS layout measurements and the media pipeline
-# keep working. Only visual height/opacity and pointer events are reduced.
-PLAYER_BAR_STYLE = (
-    f".{MINIMIZED_BAR_CLASS} {{\n"
-    "  max-height: 8px !important;\n"
-    "  overflow: hidden !important;\n"
-    "  opacity: 0.2 !important;\n"
-    "  pointer-events: none !important;\n"
-    "}\n"
-)
-
-# Finds bottom-docked bar strips, adds the minimizing class, and skips any
-# candidate containing audio/video elements. Returns the number minimized.
-# Safe to re-run (idempotent): already-classed elements are skipped.
-MINIMIZE_BAR_JS = (
-    "(function(){\n"
-    f"  var cls='{MINIMIZED_BAR_CLASS}';\n"
-    "  var vh=window.innerHeight, vw=window.innerWidth, n=0;\n"
-    "  var els=document.querySelectorAll('body div');\n"
-    "  for (var i=0;i<els.length;i++){\n"
-    "    var el=els[i];\n"
-    "    if (el.classList.contains(cls)) continue;\n"
-    "    if (el.querySelector('audio,video')) continue;\n"
-    "    var r=el.getBoundingClientRect();\n"
-    "    if (r.width < vw*0.6) continue;\n"
-    "    if (r.height < 24 || r.height > vh*0.45) continue;\n"
-    "    if (Math.abs(vh-r.bottom) > 4) continue;\n"
-    "    el.classList.add(cls); n++;\n"
-    "  }\n"
-    "  return n;\n"
-    "})()"
-)
 
 _ACTION_SELECTORS: dict[str, str] = {
     "previous": "[aria-label*=\"Previous\"], [data-testid*=\"previous\"]",

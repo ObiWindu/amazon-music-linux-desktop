@@ -6,7 +6,7 @@ import subprocess
 
 from PySide6.QtCore import QSize, QUrl
 from PySide6.QtGui import QKeySequence
-from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineScript, QWebEngineSettings
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
@@ -25,9 +25,7 @@ from PySide6.QtWidgets import (
 from .browser.download_policy import default_download_dir, safe_filename, validate_destination
 from .browser.navigation import NavigationDecision, NavigationPolicy
 from .browser.player_bridge import (
-    MINIMIZE_BAR_JS,
     NOW_PLAYING_PROBE_JS,
-    PLAYER_BAR_STYLE,
     parse_probe_result,
     player_action_js,
     track_progress_percent,
@@ -79,6 +77,33 @@ def _sidebar_button(text: str, tooltip: str) -> QPushButton:
     )
     b.setCheckable(True)
     return b
+
+
+class _BrowserHost(QWidget):
+    """Hosts the web view so the page's bottom-docked player bar never shows.
+
+    The view is sized taller than the host (host height + DOCK_PX). The page
+    viewport is therefore taller than the visible area, so Amazon's
+    bottom-docked player bar is laid out below the host rect. Qt clips child
+    widgets to their parent, so that strip is never painted and never
+    receives input, while the page keeps a fully functional player: no CSS,
+    DOM, or layout interference — the native bottom bar is the only player
+    surface visible and clickable in the app window.
+    """
+
+    DOCK_PX = 110
+
+    def __init__(self, view: QWidget, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._view = view
+        view.setParent(self)
+        view.move(0, 0)
+        view.resize(self.width(), self.height() + self.DOCK_PX)
+        view.show()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._view.resize(self.width(), self.height() + self.DOCK_PX)
 
 
 class MainWindow(QMainWindow):
@@ -139,16 +164,13 @@ class MainWindow(QMainWindow):
 
         # queue panel created later
 
-        # browser page
-        self.browser_page = QWidget()
-        bp = QVBoxLayout(self.browser_page)
-        bp.setContentsMargins(0, 0, 0, 0)
+        # browser page: the view is docked with its bottom strip (where the
+        # page's own player bar renders) outside the visible window area.
         self.view = QWebEngineView()
         self.page = WebPage(self.profile, self.policy, self.view)
         self.view.setPage(self.page)
-        bp.addWidget(self.view, 1)
+        self.browser_page = _BrowserHost(self.view)
         self.stack.addWidget(self.browser_page)
-        self._install_player_style()
 
         # settings page
         self.settings_page = SettingsPage(self.config_service.config)
@@ -278,41 +300,6 @@ class MainWindow(QMainWindow):
         self.view.load(QUrl(url))
         self._set_active(self.btn_home)
 
-    def _install_player_style(self) -> None:
-        """Inject the layout-preserving player-bar stylesheet early.
-
-        Uses QWebEngineScript at DocumentCreation so the style exists before
-        the page renders. The style only collapses the bar visually (no
-        display:none), so the page player and its media pipeline keep working.
-        """
-        scripts = self.profile.scripts()
-        for existing in scripts.toList():
-            if existing.name() == "amd-player-style":
-                return
-        import json
-
-        script = QWebEngineScript()
-        script.setName("amd-player-style")
-        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
-        script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
-        script.setRunsOnSubFrames(False)
-        script.setSourceCode(
-            "(function(){var s=document.createElement('style');"
-            f"s.textContent={json.dumps(PLAYER_BAR_STYLE)};"
-            "(document.head||document.documentElement).appendChild(s);})();"
-        )
-        scripts.insert(script)
-
-    def _minimize_web_player_bar(self) -> None:
-        try:
-            self.view.page().runJavaScript(MINIMIZE_BAR_JS, self._on_minimize_result)
-        except Exception as exc:
-            log.warning("minimize bar failed: %s", exc)
-
-    def _on_minimize_result(self, result) -> None:
-        if isinstance(result, int) and result > 0:
-            log.info("minimized %d web player bar element(s)", result)
-
     def _set_active(self, btn):
         for b in (self.btn_home, self.btn_search, self.btn_library, self.btn_playlists, self.btn_favorites):
             b.setChecked(b is btn)
@@ -402,9 +389,8 @@ class MainWindow(QMainWindow):
             log.error("clear site data failed: %s", exc)
 
     def _poll_now_playing(self):
-        # Re-apply bar minimization: the page builds its player UI lazily, so
-        # the bar may appear after loadFinished. Idempotent and cheap.
-        self._minimize_web_player_bar()
+        # Read-only probe of the page player state. The page DOM is never
+        # modified from here (see _BrowserHost for player-bar suppression).
         try:
             self.view.page().runJavaScript(NOW_PLAYING_PROBE_JS, self._on_np_result)
         except Exception as exc:
@@ -438,10 +424,9 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Failed to load")
             return
         self.status_label.setText("")
-        # Visually minimize (never remove) the page's own player bar so the
-        # native bar is the primary control surface. Layout-preserving: the
-        # page player keeps running and drives the native bar via polling.
-        self._minimize_web_player_bar()
+        # The page's own player bar renders in the docked (clipped) strip of
+        # the browser host; nothing to do here. Playback is controlled and
+        # mirrored through the native bar and the read-only state probe.
 
     def _on_render_terminated(self, status, code):
         log.error("render process terminated: status=%s code=%s", status, code)

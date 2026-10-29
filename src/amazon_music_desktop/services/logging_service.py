@@ -75,4 +75,12 @@ def setup_logging(verbosity: str = "info") -> logging.Logger:
 
 
 def get_logger(name: str = "amazon_music_desktop") -> logging.Logger:
-    return logging.getLogger(name)
+    """Return a logger nested under the app logger.
+
+    Handlers are attached to the ``amazon_music_desktop`` logger by
+    ``setup_logging``; module loggers must be children of it (or their
+    records never reach a handler and are silently dropped).
+    """
+    if name == "amazon_music_desktop":
+        return logging.getLogger(name)
+    return logging.getLogger(f"amazon_music_desktop.{name}")

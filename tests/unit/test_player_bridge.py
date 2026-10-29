@@ -1,34 +1,19 @@
+import amazon_music_desktop.browser.player_bridge as bridge
 from amazon_music_desktop.browser.player_bridge import (
-    MINIMIZE_BAR_JS,
     NOW_PLAYING_PROBE_JS,
-    PLAYER_BAR_STYLE,
     parse_probe_result,
     player_action_js,
     track_progress_percent,
 )
 
 
-def test_style_has_no_display_none():
-    assert "display" not in PLAYER_BAR_STYLE
-    assert "visibility" not in PLAYER_BAR_STYLE
-
-
-def test_style_preserves_layout():
-    assert "max-height" in PLAYER_BAR_STYLE
-    assert "pointer-events" in PLAYER_BAR_STYLE
-
-
-def test_minimize_js_skips_media_containers():
-    assert "audio,video" in MINIMIZE_BAR_JS
-
-
-def test_minimize_js_is_idempotent():
-    assert "classList.contains" in MINIMIZE_BAR_JS
-
-
-def test_minimize_js_never_removes_nodes():
-    assert "remove()" not in MINIMIZE_BAR_JS
-    assert "display" not in MINIMIZE_BAR_JS
+def test_bridge_does_not_mutate_page_player_dom():
+    # Regression guard: player-bar suppression must stay at the widget level
+    # (main_window._BrowserHost docks it out of view). CSS/JS that touches the
+    # page player broke Amazon's PlaybackAdapter and coincided with ~1s
+    # playback teardowns.
+    for attr in ("PLAYER_BAR_STYLE", "MINIMIZE_BAR_JS", "MINIMIZED_BAR_CLASS"):
+        assert not hasattr(bridge, attr)
 
 
 def test_player_action_known():
