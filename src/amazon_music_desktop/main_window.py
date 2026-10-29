@@ -136,33 +136,53 @@ class MainWindow(QMainWindow):
 
         # bottom bar
         bottom = QFrame()
-        bottom.setFixedHeight(72)
+        bottom.setFixedHeight(96)
         bottom.setStyleSheet("background: #181825; border-top: 1px solid #313244;")
-        bl = QHBoxLayout(bottom)
-        bl.setContentsMargins(12, 8, 12, 8)
-        bl.setSpacing(10)
+        bv = QVBoxLayout(bottom)
+        bv.setContentsMargins(12, 6, 12, 6)
+        bv.setSpacing(4)
 
+        # top row: player controls
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+        self.shuffle_btn = QPushButton("🔀")
+        self.prev_btn = QPushButton("⏮")
+        self.play_btn = QPushButton("▶")
+        self.next_btn = QPushButton("⏭")
+        self.repeat_btn = QPushButton("🔁")
+        for b in (self.shuffle_btn, self.prev_btn, self.play_btn, self.next_btn, self.repeat_btn):
+            b.setFixedWidth(40)
+        top_row.addWidget(self.shuffle_btn)
+        top_row.addWidget(self.prev_btn)
+        top_row.addWidget(self.play_btn)
+        top_row.addWidget(self.next_btn)
+        top_row.addWidget(self.repeat_btn)
+
+        top_row.addSpacing(12)
         self.back_btn = QPushButton("◀")
         self.forward_btn = QPushButton("▶")
         self.reload_btn = QPushButton("⟳")
         for b in (self.back_btn, self.forward_btn, self.reload_btn):
             b.setFixedWidth(40)
-        bl.addWidget(self.back_btn)
-        bl.addWidget(self.forward_btn)
-        bl.addWidget(self.reload_btn)
+        top_row.addWidget(self.back_btn)
+        top_row.addWidget(self.forward_btn)
+        top_row.addWidget(self.reload_btn)
 
         self.track_label = QLabel("Amazon Music")
         self.track_label.setStyleSheet("color: #cdd6f4; font-size: 13px;")
-        bl.addWidget(self.track_label)
-
-        self.progress = QProgressBar()
-        self.progress.setTextVisible(False)
-        self.progress.setMinimumHeight(8)
-        bl.addWidget(self.progress, 1)
+        top_row.addWidget(self.track_label, 1)
 
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #a6adc8; font-size: 12px;")
-        bl.addWidget(self.status_label)
+        top_row.addWidget(self.status_label)
+
+        bv.addLayout(top_row)
+
+        # bottom row: full-width progress bar
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setMinimumHeight(8)
+        bv.addWidget(self.progress)
 
         # place bottom bar below central content
         # restructure: use a vertical layout containing stack+bottom
@@ -202,6 +222,11 @@ class MainWindow(QMainWindow):
         self.back_btn.clicked.connect(self.view.back)
         self.forward_btn.clicked.connect(self.view.forward)
         self.reload_btn.clicked.connect(self.view.reload)
+        self.prev_btn.clicked.connect(lambda: self._player_js("previous"))
+        self.play_btn.clicked.connect(lambda: self._player_js("play"))
+        self.next_btn.clicked.connect(lambda: self._player_js("next"))
+        self.shuffle_btn.clicked.connect(lambda: self._player_js("shuffle"))
+        self.repeat_btn.clicked.connect(lambda: self._player_js("repeat"))
         self.btn_home.clicked.connect(lambda: self._nav("home"))
         self.btn_search.clicked.connect(lambda: self._nav("search"))
         self.btn_library.clicked.connect(lambda: self._nav("library"))
@@ -271,6 +296,17 @@ class MainWindow(QMainWindow):
         self.settings_page.reset_btn.clicked.connect(self.reset_settings)
         self.stack.insertWidget(idx, self.settings_page)
         self.stack.setCurrentWidget(self.settings_page)
+
+    def _player_js(self, action: str) -> None:
+        js = {
+            "previous": "document.querySelector('[aria-label*=\"Previous\"]')?.click();",
+            "play": "document.querySelector('[aria-label*=\"Play\"],[aria-label*=\"Pause\"]')?.click();",
+            "next": "document.querySelector('[aria-label*=\"Next\"]')?.click();",
+            "shuffle": "document.querySelector('[aria-label*=\"Shuffle\"]')?.click();",
+            "repeat": "document.querySelector('[aria-label*=\"Repeat\"]')?.click();",
+        }.get(action, "")
+        if js:
+            self.view.page().runJavaScript(js)
 
     def current_url(self) -> str:
         return self.view.url().toString()
