@@ -153,12 +153,12 @@ class MainWindow(QMainWindow):
 
         self.track_label = QLabel("Amazon Music")
         self.track_label.setStyleSheet("color: #cdd6f4; font-size: 13px;")
-        bl.addWidget(self.track_label, 1)
+        bl.addWidget(self.track_label)
 
         self.progress = QProgressBar()
-        self.progress.setMaximumWidth(240)
         self.progress.setTextVisible(False)
-        bl.addWidget(self.progress)
+        self.progress.setMinimumHeight(8)
+        bl.addWidget(self.progress, 1)
 
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #a6adc8; font-size: 12px;")
