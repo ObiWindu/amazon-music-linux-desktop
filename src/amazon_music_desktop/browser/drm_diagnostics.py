@@ -19,6 +19,17 @@ CDM_PATH = Path("/var/lib/widevine/libwidevinecdm.so")
 WIDEVINE_CDM_DIR = Path("/var/lib/widevine/WidevineCdm")
 WIDEVINE_CDM_FLAG = "--widevine-cdm-path"
 
+# Chromium's component-updated Widevine CDM lives under
+# <profile>/WidevineCdm/<version>/_platform_specific/<platform>/.
+# Older installs (and Qt's linux_x64 workaround) use an unversioned
+# WidevineCdm/_platform_specific/<platform>/ directory instead.
+_PLATFORM_DIRS: dict[str, tuple[str, ...]] = {
+    "aarch64": ("linux_arm64", "linux_x64"),
+    "arm64": ("linux_arm64", "linux_x64"),
+    "x86_64": ("linux_x64", "linux_arm64"),
+    "amd64": ("linux_x64", "linux_arm64"),
+}
+
 # JS probe: goes one step beyond key-system detection by creating MediaKeys
 # and a MediaKeySession, which forces Chromium to instantiate the CDM.
 # Success => CDM loads. Failure here (while key-system detection passes)
@@ -90,44 +101,133 @@ def parse_cdm_session_result(result: object) -> StageResult:
     return StageResult("C_cdm_session", False, {}, error)
 
 
-def cdm_version(cdm: Path | None = None) -> str:
-    """Read the CDM version from the neighboring manifest.json."""
-    base = cdm or CDM_PATH
-    for manifest in (
-        base.parent / "manifest.json",
-        WIDEVINE_CDM_DIR / "manifest.json",
-        Path.home() / ".config" / "chromium" / "WidevineCdm" / "manifest.json",
-    ):
+def _host_elf_arch() -> str | None:
+    machine = platform.machine().lower()
+    if machine in ("aarch64", "arm64"):
+        return "aarch64"
+    if machine in ("x86_64", "amd64"):
+        return "x86_64"
+    return None
+
+
+def _platform_dirs() -> tuple[str, ...]:
+    return _PLATFORM_DIRS.get(platform.machine().lower(), ("linux_arm64", "linux_x64"))
+
+
+def _manifest_for(cdm: Path) -> dict[str, Any]:
+    """Return the Widevine manifest next to *cdm*, if one can be read."""
+    for parent in (cdm.parent, cdm.parent.parent, cdm.parent.parent.parent):
+        manifest = parent / "manifest.json"
         try:
-            if manifest.exists():
-                import json
-
-                data = json.loads(manifest.read_text())
-                if isinstance(data.get("version"), str):
-                    return data["version"]
-        except Exception as exc:
-            log.debug("could not read %s: %s", manifest, exc)
+            if manifest.is_file():
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+        except (OSError, ValueError):
             continue
-    return "unknown"
+    return {}
 
 
-def _user_cdm_candidates() -> list[Path]:
+def _version_key(version: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for piece in version.split("."):
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def cdm_version(cdm: Path | None = None) -> str:
+    """Read the CDM version from the manifest next to the selected library."""
+    base = cdm or find_usable_cdm() or CDM_PATH
+    version = _manifest_for(base).get("version")
+    return version if isinstance(version, str) and version else "unknown"
+
+
+def _widevine_roots() -> list[Path]:
+    """Return system and per-application WidevineCdm directories."""
     home = Path.home()
-    return [
-        home / ".config" / "chromium" / "WidevineCdm" / "_platform_specific" / "linux_x64" / "libwidevinecdm.so",
-        home / ".config" / "google-chrome" / "WidevineCdm" / "_platform_specific" / "linux_x64" / "libwidevinecdm.so",
-    ]
+    roots: list[Path] = [WIDEVINE_CDM_DIR]
+    for base in (home / ".config", home / ".local" / "share"):
+        try:
+            roots.extend(sorted(base.glob("*/WidevineCdm")))
+        except OSError:
+            continue
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for root in roots:
+        try:
+            key = str(root.resolve())
+        except OSError:
+            key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
+
+def _candidate_paths() -> list[Path]:
+    """Enumerate plausible CDM library locations, including versioned ones."""
+    paths: list[Path] = [CDM_PATH]
+    for root in _widevine_roots():
+        for platform_dir in _platform_dirs():
+            paths.append(root / "_platform_specific" / platform_dir / "libwidevinecdm.so")
+        try:
+            children = sorted(
+                child
+                for child in root.iterdir()
+                if child.is_dir() and not child.is_symlink() and not child.name.startswith("_")
+            )
+        except OSError:
+            children = []
+        for child in children:
+            for platform_dir in _platform_dirs():
+                paths.append(child / "_platform_specific" / platform_dir / "libwidevinecdm.so")
+                nested = child / "WidevineCdm"
+                if nested.is_dir():
+                    paths.append(nested / "_platform_specific" / platform_dir / "libwidevinecdm.so")
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
 
 
 def find_usable_cdm() -> Path | None:
-    """Return the first readable CDM library, system install preferred."""
-    for cand in [CDM_PATH, *_user_cdm_candidates()]:
+    """Return the newest readable, architecture-compatible CDM library.
+
+    Chromium-based applications keep a component-updated CDM under
+    ``~/.config/<app>/WidevineCdm`` (sometimes versioned). Those builds can
+    be much newer than the distro package; prefer the newest one because
+    Amazon's license service rejects older ARM64 CDMs with
+    VMP_VALIDATION_FAILED.
+    """
+    host_arch = _host_elf_arch()
+    best: Path | None = None
+    best_key: tuple[Any, ...] | None = None
+    for candidate in _candidate_paths():
         try:
-            if cand.exists() and os.access(cand, os.R_OK) and cand.stat().st_size > 0:
-                return cand
+            if not candidate.is_file() or not os.access(candidate, os.R_OK):
+                continue
+            if candidate.stat().st_size <= 0:
+                continue
         except OSError:
             continue
-    return None
+        arch = _elf_arch(candidate)
+        if host_arch and arch in ("aarch64", "x86_64") and arch != host_arch:
+            continue
+        version = _manifest_for(candidate).get("version", "")
+        key = (
+            _version_key(version if isinstance(version, str) else ""),
+            1 if arch == host_arch else 0,
+            1 if candidate != CDM_PATH else 0,
+        )
+        if best_key is None or key > best_key:
+            best = candidate
+            best_key = key
+    return best
 
 
 def build_widevine_flags(cdm: Path | None, existing: str = "") -> str:
@@ -141,7 +241,7 @@ def build_widevine_flags(cdm: Path | None, existing: str = "") -> str:
 
 
 def configure_widevine() -> Path | None:
-    """Point QtWebEngine at the Widevine CDM before it initializes.
+    """Point QtWebEngine at the newest Widevine CDM before it initializes.
 
     Must run before QApplication is constructed (Chromium reads
     QTWEBENGINE_CHROMIUM_FLAGS at engine init). Returns the CDM in use.
@@ -154,7 +254,7 @@ def configure_widevine() -> Path | None:
     if cdm is None:
         log.warning("no usable Widevine CDM found; protected playback will fail")
     else:
-        log.info("using Widevine CDM at %s", cdm)
+        log.info("using Widevine CDM %s at %s", cdm_version(cdm), cdm)
     return cdm
 
 
@@ -279,43 +379,81 @@ def _qt_version() -> str:
         return "unavailable"
 
 
+def _write_user_manifest(target: Path, cdm: Path) -> None:
+    """Copy the selected CDM's manifest and add Linux platform entries."""
+    manifest = dict(_manifest_for(cdm))
+    platforms = manifest.setdefault("platforms", [])
+    for platform_dir in _platform_dirs():
+        arch = "arm64" if "arm64" in platform_dir else "x64"
+        if not any(
+            isinstance(entry, dict)
+            and entry.get("os") == "linux"
+            and entry.get("arch") == arch
+            for entry in platforms
+        ):
+            platforms.append(
+                {
+                    "os": "linux",
+                    "arch": arch,
+                    "sub_package_path": f"_platform_specific/{platform_dir}/",
+                }
+            )
+    (target / "manifest.json").write_text(json.dumps(manifest, indent=2))
+
+
 def ensure_widevine_user_dir() -> None:
-    """Ensure a user-level WidevineCdm directory exists pointing at system CDM."""
+    """Point user-level WidevineCdm dirs at the newest usable CDM.
+
+    QtWebEngine and Chromium discover Widevine through these directories.
+    Existing symlinks that still point at the old distro CDM are updated so
+    both discovery paths use the same (newer) build.
+    """
+    cdm = find_usable_cdm()
+    if cdm is None:
+        return
+    try:
+        selected = cdm.resolve()
+    except OSError:
+        selected = cdm
+    try:
+        old_system = CDM_PATH.resolve()
+    except OSError:
+        old_system = CDM_PATH
     home = Path.home()
     for base in (home / ".config" / "chromium", home / ".config" / "google-chrome"):
         target = base / "WidevineCdm"
-        if target.exists():
-            continue
         try:
             target.mkdir(parents=True, exist_ok=True)
-            sub = target / "_platform_specific" / "linux_x64"
-            sub.mkdir(parents=True, exist_ok=True)
-            manifest_src = Path("/var/lib/widevine/WidevineCdm/manifest.json")
-            if not (target / "manifest.json").exists():
-                import json
-                manifest = {}
-                if manifest_src.exists():
+            changed = False
+            for platform_dir in _platform_dirs():
+                sub = target / "_platform_specific" / platform_dir
+                sub.mkdir(parents=True, exist_ok=True)
+                link = sub / "libwidevinecdm.so"
+                if link.is_symlink():
                     try:
-                        manifest = json.loads(manifest_src.read_text())
-                    except Exception:
-                        manifest = {}
-                # add linux platform entry so Qt/Chromium can discover the CDM
-                platforms = manifest.setdefault("platforms", [])
-                if not any(p.get("os") == "linux" for p in platforms):
-                    platforms.append({"os": "linux", "arch": "x64", "sub_package_path": "_platform_specific/linux_x64/"})
-                (target / "manifest.json").write_text(json.dumps(manifest, indent=2))
-            link = sub / "libwidevinecdm.so"
-            if not link.exists():
-                try:
-                    link.symlink_to("/var/lib/widevine/libwidevinecdm.so")
-                except OSError:
-                    pass
+                        current = link.resolve()
+                    except OSError:
+                        current = None
+                    # Replace only a broken link or one pointing at the old
+                    # distro CDM; never clobber a custom CDM.
+                    if current != selected and (
+                        current is None or current == old_system or not link.exists()
+                    ):
+                        link.unlink()
+                        link.symlink_to(cdm)
+                        changed = True
+                elif not link.exists():
+                    link.symlink_to(cdm)
+                    changed = True
+            if changed or not (target / "manifest.json").exists():
+                _write_user_manifest(target, cdm)
+                log.info("updated user-level WidevineCdm dir %s -> %s", target, cdm)
         except OSError as exc:
             log.debug("could not prepare widevine dir %s: %s", target, exc)
 
 
 def run_stage_a() -> StageResult:
-    return check_library_presence()
+    return check_library_presence(find_usable_cdm() or CDM_PATH)
 
 
 def format_stage(result: StageResult) -> str:

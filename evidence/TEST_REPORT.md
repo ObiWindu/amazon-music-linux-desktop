@@ -1,6 +1,6 @@
 # Test Report
 
-- Unit tests: 30 passed
+- Unit tests: 51 passed
 - Security tests: 4 passed
-- Integration tests: 3 passed
-- Total: 37 passed, 0 failed
+- Integration tests: 3 passed (previous run; requires a display)
+- Total: 55 unit/security passed, 0 failed

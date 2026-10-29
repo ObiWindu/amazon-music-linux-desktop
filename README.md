@@ -31,11 +31,11 @@ A native desktop application for Amazon Music on Linux, built with Python 3, PyS
 Widevine is required for protected playback. The application does not bundle the proprietary CDM (licensing). Install it per distribution:
 
 - **Fedora / Fedora Asahi Remix**: `sudo dnf install widevine-installer` (provides `/var/lib/widevine/libwidevinecdm.so`). On Apple Silicon, the installer handles the 16K-page-size fixup.
-- **Fedora codecs note**: AAC/MP3 decode verified working in stock `qt6-qtwebengine` 6.11.2. On Fedora the freeworld codec library is `libavcodec-freeworld` (RPM Fusion free); no `qt6-qtwebengine-freeworld` build is published for Fedora 44 aarch64, and it isn't needed for in-app audio. If protected playback fails after ~1 second, the cause is on the Widevine side — use **Diagnostics → Test CDM session** to check whether the CDM loads.
+- **Fedora codecs note**: AAC/MP3 decode verified working in stock `qt6-qtwebengine` 6.11.2. On Fedora the freeworld codec library is `libavcodec-freeworld` (RPM Fusion free); no `qt6-qtwebengine-freeworld` build is published for Fedora 44 aarch64, and it isn't needed for in-app audio. If protected playback fails after ~1 second, the cause is on the Widevine side — use **Diagnostics → Test CDM session** and check the CDM version it reports. The app prefers the newest CDM it can find, including component-updated builds under `~/.config/<app>/WidevineCdm/<version>/`.
 - **Debian / Ubuntu**: install `chromium-widevine` (or Google Chrome) which provides a `WidevineCdm` directory under `~/.config/chromium` or `/usr/lib/chromium`.
 - **Arch Linux**: install `chromium-widevine` from the AUR, or `google-chrome`.
 
-On first launch, the app creates `~/.config/chromium/WidevineCdm` pointing at the system CDM if it is present. Run **Diagnostics** from the sidebar to verify detection.
+On first launch, the app creates or updates `~/.config/chromium/WidevineCdm` and `~/.config/google-chrome/WidevineCdm` to point at the newest CDM it finds (the distro package or a newer component-updated build). Run **Diagnostics** from the sidebar to verify detection and the CDM version in use.
 
 ## Installation
 
@@ -171,7 +171,8 @@ See `docs/SECURITY.md`. Highlights:
 ## Widevine / DRM limitations
 
 - Detection of EME or `com.widevine.alpha` does not guarantee playback.
-- Protected playback is blocked server-side on Fedora Asahi (AArch64). An instrumented live run shows: EME session created, `generateRequest` succeeds, then Amazon's license service (`music.amazon.fr/ZAZ/api/dmls/`) responds HTTP 400 with `com.amazon.digitalmusicdrmlicenseservice#ForbiddenException`, `denialReason: VMP_VALIDATION_FAILED` — "UNVERIFIED request not eligible for LD content". Amazon validates the Widevine Verified Media Path attestation; the only ARM64 Linux CDM (4.10.2662.3, 2022, from the widevine-installer LaCrOS 120 image — the last build published for this architecture) fails that validation. No app-side change can fix this: the VMP chain is embedded in the proprietary CDM and enforced by Amazon's servers.
+- Protected playback with the 2022 ARM64 CDM (4.10.2662.3, from the widevine-installer LaCrOS 120 image) is blocked server-side on Fedora Asahi. An instrumented live run shows: EME session created, `generateRequest` succeeds, then Amazon's license service (`music.amazon.fr/ZAZ/api/dmls/`) responds HTTP 400 with `com.amazon.digitalmusicdrmlicenseservice#ForbiddenException`, `denialReason: VMP_VALIDATION_FAILED` — "UNVERIFIED request not eligible for LD content". Amazon validates the Widevine Verified Media Path attestation, and that older build fails it.
+- The app now discovers and prefers the newest readable CDM across the system package and user-level Chromium component directories (`~/.config/<app>/WidevineCdm/<version>/_platform_specific/linux_arm64/`). On this host, 4.10.3112.0 is selected instead of 4.10.2662.3; Diagnostics reports the version in use. If playback still fails with `VMP_VALIDATION_FAILED`, confirm Diagnostics shows 4.10.3112.0 or newer.
 - The Amazon web player bar is never shown: the web view is docked so its bottom strip (where the page's player bar renders) is outside the visible window. The page player itself is left completely untouched — no CSS, DOM, or layout modification — because touching it correlated with playback teardowns. The native bottom bar is the only visible player surface.
 - Actual protected playback requires a valid Amazon account and subscription.
 - See `docs/DRM_COMPATIBILITY.md` and `evidence/DRM_REPORT.md`.
@@ -182,7 +183,7 @@ See `docs/TROUBLESHOOTING.md`. Common issues:
 
 - **Missing WebEngine bindings**: install `qt6-qtwebengine` and `python3-pyside6`.
 - **Widevine not detected**: install the distro CDM package; run Diagnostics.
-- **Incompatible CDM**: check ELF architecture with `file /var/lib/widevine/libwidevinecdm.so`.
+- **Incompatible CDM**: check Diagnostics → CDM in use, then verify its ELF architecture with `file <path>`.
 - **Login loops**: clear site data via Settings → (or File menu).
 - **Audio failures**: check PipeWire/PulseAudio.
 - **Renderer crashes**: review logs in `~/.local/state/amazon-music-desktop/logs/`.

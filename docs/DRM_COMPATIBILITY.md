@@ -2,12 +2,28 @@
 
 - Qt WebEngine: 6.11.2
 - Chromium: 140.0.0.0
-- CDM path: /var/lib/widevine/libwidevinecdm.so
 - Architecture: aarch64 (ELF 64-bit)
-- Dependencies: resolved (ldd)
-- EME: com.widevine.alpha available (tested)
-- CDM initialization: the app passes `--widevine-cdm-path=<cdm>` via `QTWEBENGINE_CHROMIUM_FLAGS` before engine init (system CDM preferred, user-level fallback). App also ensures the user-level WidevineCdm dir on startup.
-- Audio codecs: AAC and MP3 decode verified working in stock QtWebEngine 6.11.2 via decodeAudioData (2026-10-29).
-- CDM version installed: 4.10.2662.3 (2022) vs Chromium 140 — version mismatch is the prime suspect if session creation fails. Use Diagnostics → Test CDM session to confirm.
-- Amazon playback: requires valid account/subscription; not verified in this environment.
-- Known limitation: Qt build hardcodes linux_x64 Widevine path; user-level symlink workaround used.
+- System CDM: `/var/lib/widevine/libwidevinecdm.so` (4.10.2662.3, 2022)
+- User-level CDM: component-updated builds under
+  `~/.config/<app>/WidevineCdm/<version>/_platform_specific/linux_arm64/`
+  (for example 4.10.3112.0).
+- Discovery: the app scans the system install, `~/.config/chromium`,
+  `~/.config/google-chrome`, and versioned `WidevineCdm` directories from
+  Chromium-based applications. It selects the newest readable CDM whose ELF
+  architecture matches the host.
+- Initialization: the selected library is passed to QtWebEngine as
+  `--widevine-cdm-path=<cdm>` via `QTWEBENGINE_CHROMIUM_FLAGS` before engine
+  init. The app also creates or updates the user-level `WidevineCdm`
+  directories so both discovery paths point at the same build.
+- Diagnostics: **Diagnostics → CDM in use / CDM version** reports the selected
+  path and version. **Test CDM session** creates MediaKeys and a
+  MediaKeySession to prove the CDM loads.
+- Audio codecs: AAC and MP3 decode verified working in stock QtWebEngine
+  6.11.2 via `decodeAudioData` (2026-10-29).
+- Amazon playback: the older 4.10.2662.3 build is rejected by Amazon's license
+  service with `VMP_VALIDATION_FAILED`. The newer 4.10.3112.0 build is selected
+  automatically when present; protected playback must be verified on a host
+  with an Amazon account, subscription, and audio output.
+- Known limitation: Qt builds may hardcode the `linux_x64` Widevine path; the
+  app therefore maintains both `linux_x64` and `linux_arm64` symlinks in its
+  user-level CDM directories.

@@ -131,13 +131,17 @@ class DiagnosticsDialog(QDialog):
 
     def _cdm_finish(self, message: str) -> None:
         current = self.text.toPlainText()
+        version = cdm_version(find_usable_cdm())
         self.text.setPlainText(
             current
             + "\n\n=== Widevine Stage C (live) ===\n"
             + message
             + "\n\nnote: a successful CDM session does not imply protected playback;"
-            "\nAmazon's license service currently rejects this CDM server-side"
-            " (VMP_VALIDATION_FAILED)."
+            f"\nCDM in use: {version}. Amazon rejected the older ARM64 build"
+            "\n4.10.2662.3 with VMP_VALIDATION_FAILED; newer builds may pass."
+            "\nIf this shows 4.10.2662.3, install or update a Chromium-based"
+            "\napplication that ships a newer ARM64 CDM. If playback still"
+            "\nfails, check the license response in the log."
         )
 
     def _cdm_note(self, message: str) -> None:
@@ -157,9 +161,14 @@ class DiagnosticsDialog(QDialog):
         lines.append("=== Widevine Stage A ===")
         lines.append(format_stage(run_stage_a()))
         lines.append("")
-        lines.append(f"CDM path: {CDM_PATH}")
-        lines.append(f"CDM in use: {find_usable_cdm()}")
-        lines.append(f"CDM version: {cdm_version()}")
+        selected_cdm = find_usable_cdm()
+        lines.append(f"CDM system path: {CDM_PATH}")
+        lines.append(f"CDM in use: {selected_cdm or 'none'}")
+        lines.append(f"CDM version: {cdm_version(selected_cdm)}")
+        lines.append(
+            "CDM selection: newest readable build across system and "
+            "user-level Chromium directories"
+        )
         freeworld = detect_freeworld()
         lines.append(f"libavcodec-freeworld (Fedora freeworld codec library): {freeworld}")
         lines.append("note: AAC/MP3 decode verified working in this WebEngine build;")

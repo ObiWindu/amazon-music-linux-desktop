@@ -17,7 +17,7 @@
 | AC-13 | Missing CDM handled | Implemented | diagnostics |
 | AC-14 | CDM arch/deps checked | Verified | diagnostics |
 | AC-15 | EME detected | Verified | manual test |
-| AC-16 | CDM init assessed | Partial | DRM_REPORT.md |
+| AC-16 | CDM init assessed | Verified | DRM_REPORT.md (MediaKeys/session OK; newest CDM selected) |
 | AC-17 | Amazon protected playback | Unverified | requires account |
 | AC-18 | Audio output | Unverified | requires account |
 | AC-19 | Sustained playback | Unverified | requires account |
