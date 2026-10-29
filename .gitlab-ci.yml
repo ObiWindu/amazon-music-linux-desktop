@@ -1,0 +1,55 @@
+stages:
+  - lint
+  - test
+  - build
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip
+
+lint:
+  stage: lint
+  image: python:3.12
+  script:
+    - pip install ruff mypy
+    - ruff check src tests
+    - mypy src --ignore-missing-imports
+
+unit-tests:
+  stage: test
+  image: python:3.12
+  script:
+    - pip install pytest pytest-qt pyside6
+    - python -m pytest tests/unit tests/security -q
+
+integration-tests:
+  stage: test
+  image: python:3.12
+  before_script:
+    - apt-get update && apt-get install -y xvfb libgl1 libegl1 libxkbcommon0 libdbus-1-3
+  script:
+    - pip install pytest pytest-qt pyside6
+    - xvfb-run -a python -m pytest tests/integration -q
+
+build-rpm:
+  stage: build
+  image: fedora:44
+  script:
+    - dnf install -y rpm-build python3 python3-pyside6 qt6-qtwebengine
+    - rpmbuild -ba packaging/rpm/amazon-music-desktop.spec
+  artifacts:
+    paths:
+      - RPMS/
+
+build-deb:
+  stage: build
+  image: ubuntu:24.04
+  script:
+    - apt-get update && apt-get install -y build-essential debhelper python3 python3-pyside6
+    - cd packaging/debian && dpkg-buildpackage -us -uc -b
+  artifacts:
+    paths:
+      - "*.deb"

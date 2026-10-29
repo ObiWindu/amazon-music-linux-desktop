@@ -1,0 +1,12 @@
+Source: amazon-music-desktop
+Section: sound
+Priority: optional
+Maintainer: Aurora <aurora@example.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+
+Package: amazon-music-desktop
+Architecture: all
+Depends: python3, python3-pyside6, qt6-webengine-dev | qt6-webengine, ${misc:Depends}
+Description: Desktop client for Amazon Music
+ Native desktop wrapper for Amazon Music using Qt WebEngine.
