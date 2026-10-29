@@ -365,17 +365,35 @@ class MainWindow(QMainWindow):
             log.error("clear site data failed: %s", exc)
 
     def _poll_now_playing(self):
-        js = "document.title"
+        js = (
+            "(function(){"
+            "var a=document.querySelector('audio');"
+            "return {title:document.title,"
+            "cur:a?a.currentTime:0,"
+            "dur:a?a.duration:0,"
+            "paused:a?a.paused:true};"
+            "})()"
+        )
         try:
             self.view.page().runJavaScript(js, self._on_np_result)
         except Exception:
             pass
 
     def _on_np_result(self, result):
-        if isinstance(result, str) and result:
+        if isinstance(result, dict):
+            title = result.get("title")
+            if isinstance(title, str) and title:
+                self.now_playing.set_track(title)
+                if self.queue_list.count() == 0 or self.queue_list.item(self.queue_list.count() - 1).text() != title:
+                    self.queue_list.addItem(title)
+            cur = result.get("cur", 0) or 0
+            dur = result.get("dur", 0) or 0
+            if dur and dur > 0:
+                self.progress.setValue(int(cur / dur * 100))
+            paused = result.get("paused", True)
+            self.play_btn.setText("▶" if paused else "⏸")
+        elif isinstance(result, str) and result:
             self.now_playing.set_track(result)
-            if self.queue_list.count() == 0 or self.queue_list.item(self.queue_list.count() - 1).text() != result:
-                self.queue_list.addItem(result)
 
     def _on_url_changed(self, url):
         self.back_btn.setEnabled(self.view.history().canGoBack())
