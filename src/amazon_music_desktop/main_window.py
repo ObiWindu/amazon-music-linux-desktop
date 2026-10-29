@@ -28,6 +28,7 @@ from .browser.profile import ProfileManager
 from .services.configuration import ConfigService
 from .services.desktop_integration import create_tray, tray_available
 from .services.logging_service import get_logger
+from .ui.now_playing import NowPlayingWidget
 from .ui.settings_page import SettingsPage
 
 log = get_logger("main_window")
@@ -98,6 +99,9 @@ class MainWindow(QMainWindow):
         title = QLabel("Amazon Music")
         title.setStyleSheet("color: #cba6f7; font-size: 16px; font-weight: bold; padding: 8px;")
         sb_layout.addWidget(title)
+
+        self.now_playing = NowPlayingWidget()
+        sb_layout.addWidget(self.now_playing)
 
         self.btn_home = _sidebar_button("🏠  Home", "Home")
         self.btn_search = _sidebar_button("🔍  Search", "Search")
@@ -214,6 +218,11 @@ class MainWindow(QMainWindow):
 
         # signals
         self.view.urlChanged.connect(self._on_url_changed)
+
+        from PySide6.QtCore import QTimer
+        self._np_timer = QTimer(self)
+        self._np_timer.timeout.connect(self._poll_now_playing)
+        self._np_timer.start(4000)
         self.view.loadStarted.connect(self._on_load_started)
         self.view.loadProgress.connect(self._on_load_progress)
         self.view.loadFinished.connect(self._on_load_finished)
@@ -330,6 +339,17 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Done", "Site data cleared. Restart the app.")
         except Exception as exc:
             log.error("clear site data failed: %s", exc)
+
+    def _poll_now_playing(self):
+        js = "document.title"
+        try:
+            self.view.page().runJavaScript(js, self._on_np_result)
+        except Exception:
+            pass
+
+    def _on_np_result(self, result):
+        if isinstance(result, str) and result:
+            self.now_playing.set_track(result)
 
     def _on_url_changed(self, url):
         self.back_btn.setEnabled(self.view.history().canGoBack())
