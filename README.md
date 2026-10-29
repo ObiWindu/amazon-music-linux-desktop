@@ -31,7 +31,7 @@ A native desktop application for Amazon Music on Linux, built with Python 3, PyS
 Widevine is required for protected playback. The application does not bundle the proprietary CDM (licensing). Install it per distribution:
 
 - **Fedora / Fedora Asahi Remix**: `sudo dnf install widevine-installer` (provides `/var/lib/widevine/libwidevinecdm.so`). On Apple Silicon, the installer handles the 16K-page-size fixup.
-- **Fedora codecs (required for DRM playback)**: stock `qt6-qtwebengine` lacks proprietary codecs. Enable RPM Fusion and install `sudo dnf install qt6-qtwebengine-freeworld`. Without it, playback stops with an error after ~1 second.
+- **Fedora codecs note**: stock `qt6-qtwebengine` lacks some proprietary codecs. No `qt6-qtwebengine-freeworld` build is published for Fedora 44 aarch64, so if protected playback fails with an error after ~1 second, missing codecs is the likely cause with no repo fix currently available.
 - **Debian / Ubuntu**: install `chromium-widevine` (or Google Chrome) which provides a `WidevineCdm` directory under `~/.config/chromium` or `/usr/lib/chromium`.
 - **Arch Linux**: install `chromium-widevine` from the AUR, or `google-chrome`.
 

@@ -40,8 +40,9 @@ def main(argv: list[str] | None = None) -> int:
     freeworld = detect_freeworld()
     if freeworld is False:
         log.warning(
-            "qt6-qtwebengine-freeworld is not installed; stock Fedora WebEngine "
-            "lacks proprietary codecs required for protected playback"
+            "qt6-qtwebengine-freeworld is not installed and no freeworld Qt6 "
+            "WebEngine build is published for Fedora 44 aarch64; if protected "
+            "playback fails, missing proprietary codecs is the likely cause"
         )
 
     app = QApplication(argv)

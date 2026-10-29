@@ -52,5 +52,7 @@ class DiagnosticsDialog(QDialog):
         freeworld = detect_freeworld()
         lines.append(f"freeworld WebEngine (proprietary codecs): {freeworld}")
         if freeworld is False:
-            lines.append("  -> install qt6-qtwebengine-freeworld from RPM Fusion for DRM playback")
+            lines.append("  -> no freeworld Qt6 WebEngine build is published for Fedora 44")
+            lines.append("     aarch64; if protected playback fails, missing proprietary")
+            lines.append("     codecs is the likely cause")
         self.text.setPlainText("\n".join(lines))
