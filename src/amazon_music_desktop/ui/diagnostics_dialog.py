@@ -41,6 +41,8 @@ class DiagnosticsDialog(QDialog):
         self.run()
 
     def test_cdm_session(self) -> None:
+        from PySide6.QtCore import QTimer
+
         from ..browser.drm_diagnostics import CDM_SESSION_PROBE_JS
 
         window = self.parent()
@@ -49,10 +51,29 @@ class DiagnosticsDialog(QDialog):
             self.text.setPlainText("No browser page available for CDM test.")
             return
         self.text.setPlainText("Testing CDM session (creates MediaKeys + session)...")
+        # QtWebEngine does not resolve returned Promises to Python, so the
+        # probe stores its result on window and we read it back after a delay.
+        starter = (
+            "window.__amdCdmTest = null;\n"
+            f"void ({CDM_SESSION_PROBE_JS}).then(r => {{ window.__amdCdmTest = r; }});"
+            "'started';"
+        )
         try:
-            page.runJavaScript(CDM_SESSION_PROBE_JS, self._on_cdm_session_result)
+            page.runJavaScript(starter)
         except Exception as exc:
             self.text.setPlainText(f"CDM session test failed to start: {exc}")
+            return
+        QTimer.singleShot(4000, self._fetch_cdm_session_result)
+
+    def _fetch_cdm_session_result(self) -> None:
+        window = self.parent()
+        page = getattr(getattr(window, "view", None), "page", lambda: None)()
+        if page is None:
+            return
+        try:
+            page.runJavaScript("window.__amdCdmTest", self._on_cdm_session_result)
+        except Exception as exc:
+            self.text.setPlainText(f"CDM session test failed to read back: {exc}")
 
     def _on_cdm_session_result(self, result) -> None:
         stage = parse_cdm_session_result(result)

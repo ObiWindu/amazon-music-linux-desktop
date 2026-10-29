@@ -22,6 +22,8 @@ WIDEVINE_CDM_FLAG = "--widevine-cdm-path"
 # and a MediaKeySession, which forces Chromium to instantiate the CDM.
 # Success => CDM loads. Failure here (while key-system detection passes)
 # => CDM rejected/incompatible. License failures happen later, server-side.
+# NOTE: QtWebEngine does not resolve returned Promises to Python callbacks,
+# so callers must store the result (e.g. on window) and read it back later.
 CDM_SESSION_PROBE_JS = (
     "(async () => {"
     "try {"
