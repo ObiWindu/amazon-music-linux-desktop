@@ -390,6 +390,18 @@ class MainWindow(QMainWindow):
 
     def _on_load_started(self):
         self.progress.setValue(0)
+        css = (
+            "var s=document.createElement('style');"
+            "s.textContent='[class*=\"Player\"],[class*=\"player\"],"
+            "[class*=\"now-playing\"],[class*=\"NowPlaying\"],"
+            "footer, [role=\"contentinfo\"]{display:none!important;visibility:hidden!important;}';"
+            "if(document.head) document.head.appendChild(s);"
+            "else document.addEventListener('DOMContentLoaded',function(){document.head.appendChild(s);});"
+        )
+        try:
+            self.view.page().runJavaScript(css)
+        except Exception:
+            pass
 
     def _on_load_progress(self, progress):
         self.progress.setValue(progress)
