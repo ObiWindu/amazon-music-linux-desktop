@@ -15,6 +15,7 @@ native bar is the only player surface visible or clickable in the app.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 # Locales observed live on music.amazon.fr (2026-10-29): play buttons are
@@ -68,15 +69,16 @@ _PLAY_JS = (
     "})()"
 )
 
-# Probe the page player state. Returns {title, cur, dur, paused}.
-# Runs against the first <audio> element (Amazon's playback element).
+# Probe the page player state. Returns a JSON string because QtWebEngine
+# 6.11 delivers only primitive values from runJavaScript (objects and
+# arrays arrive as ''); parses back to {title, cur, dur, paused}.
 NOW_PLAYING_PROBE_JS = (
     "(function(){"
     "var a=document.querySelector('audio');"
-    "return {title:document.title,"
+    "return JSON.stringify({title:document.title,"
     "cur:a?a.currentTime:0,"
     "dur:a?a.duration:0,"
-    "paused:a?a.paused:true};"
+    "paused:a?a.paused:true});"
     "})()"
 )
 
@@ -116,7 +118,17 @@ def player_action_js(action: str) -> str:
 
 
 def parse_probe_result(result: Any) -> dict[str, Any] | None:
-    """Normalize the probe callback payload. Returns None if unusable."""
+    """Normalize the probe callback payload. Returns None if unusable.
+
+    Accepts the JSON string the probe returns (QtWebEngine 6.11 delivers
+    object results as empty strings, so probes stringify) and, for stacks
+    that deliver dicts directly, the dict form.
+    """
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except (ValueError, TypeError):
+            return None
     if not isinstance(result, dict):
         return None
     title = result.get("title")

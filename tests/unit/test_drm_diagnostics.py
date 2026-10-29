@@ -87,6 +87,30 @@ def test_cdm_session_probe_js_shape():
     assert "com.widevine.alpha" in CDM_SESSION_PROBE_JS
 
 
+def test_cdm_probe_state_missing():
+    from amazon_music_desktop.browser.drm_diagnostics import cdm_probe_state
+    for value in (None, "", "MISSING"):
+        assert cdm_probe_state(value) == ("missing", None)
+
+
+def test_cdm_probe_state_progress_and_final():
+    import json
+
+    from amazon_music_desktop.browser.drm_diagnostics import CDM_TEST_READ_JS, cdm_probe_state
+    # QtWebEngine 6.11 delivers objects as ''; read-backs must stringify.
+    assert "JSON.stringify" in CDM_TEST_READ_JS
+    state, raw = cdm_probe_state(json.dumps({"ok": False, "error": "stage: creating MediaKeys..."}))
+    assert state == "progress" and raw["error"].startswith("stage:")
+    state, raw = cdm_probe_state(json.dumps({"ok": True, "keySystem": "com.widevine.alpha"}))
+    assert state == "final" and raw["ok"] is True
+    state, raw = cdm_probe_state(json.dumps({"ok": False, "error": "NotSupportedError: nope"}))
+    assert state == "final"
+    state, raw = cdm_probe_state({"ok": True, "keySystem": "com.widevine.alpha"})
+    assert state == "final"
+    state, raw = cdm_probe_state("garbage")
+    assert state == "final" and raw == "garbage"
+
+
 def test_detect_freeworld_checks_libavcodec_freeworld(monkeypatch):
     import amazon_music_desktop.browser.drm_diagnostics as d
 

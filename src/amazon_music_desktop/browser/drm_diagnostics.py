@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import struct
@@ -45,6 +46,36 @@ CDM_SESSION_PROBE_JS = (
     "})();"
     "'started';"
 )
+
+# Read-back for the CDM session probe. QtWebEngine 6.11 delivers only
+# primitive values from runJavaScript (objects, arrays and undefined all
+# arrive as the empty string), so the read-back stringifies and uses the
+# 'MISSING' sentinel for an absent marker.
+CDM_TEST_READ_JS = "(JSON.stringify(window.__amdCdmTest) || 'MISSING')"
+
+
+def cdm_probe_state(result: object) -> tuple[str, object]:
+    """Classify a read-back of the CDM session probe marker.
+
+    Returns (state, raw) where state is one of:
+    - "missing":  marker absent (page reloaded or probe never ran)
+    - "progress": probe is mid-flight (raw carries the current stage)
+    - "final":    probe finished (raw is the result dict or unexpected value)
+    """
+    if result is None or result == "" or result == "MISSING":
+        return "missing", None
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            return "final", result
+    if isinstance(result, dict):
+        if result.get("ok") is True:
+            return "final", result
+        if str(result.get("error", "")).startswith("stage:"):
+            return "progress", result
+        return "final", result
+    return "final", result
 
 
 def parse_cdm_session_result(result: object) -> StageResult:

@@ -65,6 +65,17 @@ def test_probe_js_reads_audio_element():
     assert "querySelector('audio')" in NOW_PLAYING_PROBE_JS
     assert "currentTime" in NOW_PLAYING_PROBE_JS
     assert "paused" in NOW_PLAYING_PROBE_JS
+    # QtWebEngine 6.11 delivers object results as ''; probes must stringify.
+    assert "JSON.stringify" in NOW_PLAYING_PROBE_JS
+
+
+def test_parse_probe_result_accepts_json_string():
+    import json
+
+    state = parse_probe_result(json.dumps({"title": "Song", "cur": 30, "dur": 120, "paused": False}))
+    assert state == {"title": "Song", "cur": 30.0, "dur": 120.0, "paused": False}
+    assert parse_probe_result("not json") is None
+    assert parse_probe_result("") is None
 
 
 def test_parse_probe_result_valid():
