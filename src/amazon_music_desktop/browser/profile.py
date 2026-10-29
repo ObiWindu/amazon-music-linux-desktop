@@ -43,6 +43,10 @@ class ProfileManager:
         profile.setPersistentCookiesPolicy(
             QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies
         )
+        profile.setHttpUserAgent(
+            "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+        )
         log.info("created persistent profile at %s", self.profile_path)
         self._profile = profile
         return profile
