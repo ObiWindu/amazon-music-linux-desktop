@@ -168,16 +168,6 @@ class MainWindow(QMainWindow):
         top_row.addWidget(self.next_btn)
         top_row.addWidget(self.repeat_btn)
 
-        top_row.addSpacing(12)
-        self.back_btn = QPushButton("◀")
-        self.forward_btn = QPushButton("▶")
-        self.reload_btn = QPushButton("⟳")
-        for b in (self.back_btn, self.forward_btn, self.reload_btn):
-            b.setFixedWidth(40)
-        top_row.addWidget(self.back_btn)
-        top_row.addWidget(self.forward_btn)
-        top_row.addWidget(self.reload_btn)
-
         self.track_label = QLabel("Amazon Music")
         self.track_label.setStyleSheet("color: #cdd6f4; font-size: 13px;")
         top_row.addWidget(self.track_label, 1)
@@ -250,9 +240,6 @@ class MainWindow(QMainWindow):
         self.profile.downloadRequested.connect(self._on_download_requested)
 
         # wire
-        self.back_btn.clicked.connect(self.view.back)
-        self.forward_btn.clicked.connect(self.view.forward)
-        self.reload_btn.clicked.connect(self.view.reload)
         self.prev_btn.clicked.connect(lambda: self._player_js("previous"))
         self.play_btn.clicked.connect(lambda: self._player_js("play"))
         self.next_btn.clicked.connect(lambda: self._player_js("next"))
@@ -396,8 +383,6 @@ class MainWindow(QMainWindow):
             self.now_playing.set_track(result)
 
     def _on_url_changed(self, url):
-        self.back_btn.setEnabled(self.view.history().canGoBack())
-        self.forward_btn.setEnabled(self.view.history().canGoForward())
         self.status_label.setText(url.host())
 
     def _on_load_started(self):
@@ -407,7 +392,6 @@ class MainWindow(QMainWindow):
         self.progress.setValue(progress)
 
     def _on_load_finished(self, ok):
-        self.progress.setValue(100 if ok else 0)
         if not ok:
             self.status_label.setText("Failed to load")
 
