@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         # Verified 2026-10-29: stock QtWebEngine 6.11.2 decodes AAC and MP3
         # (decodeAudioData OK), so this is informational only. Protected
         # playback depends on the Widevine CDM + license, not this package.
-        log.info("qt6-qtwebengine-freeworld not installed (no Qt6 freeworld build published for F44 aarch64)")
+        log.info("libavcodec-freeworld not installed (Fedora freeworld codec library from RPM Fusion free; not needed for in-app audio)")
 
     app = QApplication(argv)
     app.setApplicationName("Amazon Music Desktop")

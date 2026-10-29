@@ -107,7 +107,7 @@ class DiagnosticsDialog(QDialog):
         lines.append(f"CDM in use: {find_usable_cdm()}")
         lines.append(f"CDM version: {cdm_version()}")
         freeworld = detect_freeworld()
-        lines.append(f"freeworld WebEngine (proprietary codecs): {freeworld}")
+        lines.append(f"libavcodec-freeworld (Fedora freeworld codec library): {freeworld}")
         lines.append("note: AAC/MP3 decode verified working in this WebEngine build;")
         lines.append("use 'Test CDM session' to check whether the CDM itself loads.")
         self.text.setPlainText("\n".join(lines))

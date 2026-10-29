@@ -85,3 +85,30 @@ def test_cdm_session_probe_js_shape():
     assert "createMediaKeys" in CDM_SESSION_PROBE_JS
     assert "createSession" in CDM_SESSION_PROBE_JS
     assert "com.widevine.alpha" in CDM_SESSION_PROBE_JS
+
+
+def test_detect_freeworld_checks_libavcodec_freeworld(monkeypatch):
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    class FakeProc:
+        def __init__(self, returncode):
+            self.returncode = returncode
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return FakeProc(0 if cmd == ["rpm", "-q", "libavcodec-freeworld"] else 1)
+
+    monkeypatch.setattr(d.subprocess, "run", fake_run)
+    assert d.detect_freeworld() is True
+    assert calls == [["rpm", "-q", "libavcodec-freeworld"]]
+
+    monkeypatch.setattr(d.subprocess, "run", lambda cmd, **kw: FakeProc(1))
+    assert d.detect_freeworld() is False
+
+    def boom(cmd, **kw):
+        raise FileNotFoundError("rpm")
+
+    monkeypatch.setattr(d.subprocess, "run", boom)
+    assert d.detect_freeworld() is None

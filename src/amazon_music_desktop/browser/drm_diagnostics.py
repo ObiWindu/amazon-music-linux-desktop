@@ -128,14 +128,15 @@ def configure_widevine() -> Path | None:
 
 
 def detect_freeworld() -> bool | None:
-    """Check for the RPM Fusion freeworld WebEngine (proprietary codecs).
+    """Check for the Fedora freeworld codec library (libavcodec-freeworld).
 
-    Returns True/False on rpm systems, None when rpm is unavailable.
-    Stock Fedora QtWebEngine lacks proprietary codecs needed for DRM media.
+    On Fedora the freeworld codec stack ships as ``libavcodec-freeworld``
+    from RPM Fusion free — there is no qt6-qtwebengine-freeworld build for
+    Fedora. Returns True/False on rpm systems, None when rpm is unavailable.
     """
     try:
         proc = subprocess.run(
-            ["rpm", "-q", "qt6-qtwebengine-freeworld"],
+            ["rpm", "-q", "libavcodec-freeworld"],
             capture_output=True, text=True, timeout=15, check=False,
         )
     except Exception:
