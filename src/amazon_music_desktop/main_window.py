@@ -115,14 +115,18 @@ class MainWindow(QMainWindow):
 
         self.btn_settings = _sidebar_button("⚙  Settings", "Settings")
         self.btn_diagnostics = _sidebar_button("🩺  Diagnostics", "Diagnostics")
+        self.btn_queue = _sidebar_button("📋  Queue", "Queue")
         sb_layout.addWidget(self.btn_settings)
         sb_layout.addWidget(self.btn_diagnostics)
+        sb_layout.addWidget(self.btn_queue)
 
         root.addWidget(sidebar)
 
         # stacked content
         self.stack = QStackedWidget()
         root.addWidget(self.stack, 1)
+
+        # queue panel created later
 
         # browser page
         self.browser_page = QWidget()
@@ -206,6 +210,22 @@ class MainWindow(QMainWindow):
         tr.setSpacing(0)
         tr.addWidget(sidebar)
         tr.addWidget(self.stack, 1)
+
+        # right queue panel
+        self.queue_panel = QFrame()
+        self.queue_panel.setFixedWidth(260)
+        self.queue_panel.setStyleSheet("background: #181825; border-left: 1px solid #313244;")
+        qp = QVBoxLayout(self.queue_panel)
+        qp.setContentsMargins(10, 16, 10, 16)
+        qtitle = QLabel("Queue")
+        qtitle.setStyleSheet("color: #cba6f7; font-size: 16px; font-weight: bold;")
+        qp.addWidget(qtitle)
+        from PySide6.QtWidgets import QListWidget
+        self.queue_list = QListWidget()
+        self.queue_list.setStyleSheet("background: #1e1e2e; color: #cdd6f4; border: none;")
+        qp.addWidget(self.queue_list, 1)
+        tr.addWidget(self.queue_panel)
+
         outer_layout.addWidget(top_row, 1)
         outer_layout.addWidget(bottom)
 
@@ -245,6 +265,7 @@ class MainWindow(QMainWindow):
         self.btn_favorites.clicked.connect(lambda: self._nav("favorites"))
         self.btn_settings.clicked.connect(self.show_settings)
         self.btn_diagnostics.clicked.connect(self.show_diagnostics)
+        self.btn_queue.clicked.connect(self.toggle_queue)
         self.settings_page.apply_btn.clicked.connect(self.apply_settings)
         self.settings_page.reset_btn.clicked.connect(self.reset_settings)
 
@@ -289,6 +310,9 @@ class MainWindow(QMainWindow):
     def show_diagnostics(self):
         from .ui.diagnostics_dialog import DiagnosticsDialog
         DiagnosticsDialog(self).exec()
+
+    def toggle_queue(self):
+        self.queue_panel.setVisible(not self.queue_panel.isVisible())
 
     def apply_settings(self):
         self.settings_page.apply_to(self.config_service.config)
@@ -350,6 +374,8 @@ class MainWindow(QMainWindow):
     def _on_np_result(self, result):
         if isinstance(result, str) and result:
             self.now_playing.set_track(result)
+            if self.queue_list.count() == 0 or self.queue_list.item(self.queue_list.count() - 1).text() != result:
+                self.queue_list.addItem(result)
 
     def _on_url_changed(self, url):
         self.back_btn.setEnabled(self.view.history().canGoBack())
