@@ -6,7 +6,7 @@ import subprocess
 
 from PySide6.QtCore import QSize, QUrl
 from PySide6.QtGui import QKeySequence
-from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineScript, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
@@ -24,6 +24,14 @@ from PySide6.QtWidgets import (
 
 from .browser.download_policy import default_download_dir, safe_filename, validate_destination
 from .browser.navigation import NavigationDecision, NavigationPolicy
+from .browser.player_bridge import (
+    MINIMIZE_BAR_JS,
+    NOW_PLAYING_PROBE_JS,
+    PLAYER_BAR_STYLE,
+    parse_probe_result,
+    player_action_js,
+    track_progress_percent,
+)
 from .browser.profile import ProfileManager
 from .services.configuration import ConfigService
 from .services.desktop_integration import create_tray, tray_available
@@ -140,6 +148,7 @@ class MainWindow(QMainWindow):
         self.view.setPage(self.page)
         bp.addWidget(self.view, 1)
         self.stack.addWidget(self.browser_page)
+        self._install_player_style()
 
         # settings page
         self.settings_page = SettingsPage(self.config_service.config)
@@ -235,7 +244,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import QTimer
         self._np_timer = QTimer(self)
         self._np_timer.timeout.connect(self._poll_now_playing)
-        self._np_timer.start(4000)
+        self._np_timer.start(1000)
         self.view.loadStarted.connect(self._on_load_started)
         self.view.loadProgress.connect(self._on_load_progress)
         self.view.loadFinished.connect(self._on_load_finished)
@@ -268,6 +277,41 @@ class MainWindow(QMainWindow):
             url = self.config_service.region_url()
         self.view.load(QUrl(url))
         self._set_active(self.btn_home)
+
+    def _install_player_style(self) -> None:
+        """Inject the layout-preserving player-bar stylesheet early.
+
+        Uses QWebEngineScript at DocumentCreation so the style exists before
+        the page renders. The style only collapses the bar visually (no
+        display:none), so the page player and its media pipeline keep working.
+        """
+        scripts = self.profile.scripts()
+        for existing in scripts.toList():
+            if existing.name() == "amd-player-style":
+                return
+        import json
+
+        script = QWebEngineScript()
+        script.setName("amd-player-style")
+        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+        script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+        script.setRunsOnSubFrames(False)
+        script.setSourceCode(
+            "(function(){var s=document.createElement('style');"
+            f"s.textContent={json.dumps(PLAYER_BAR_STYLE)};"
+            "(document.head||document.documentElement).appendChild(s);})();"
+        )
+        scripts.insert(script)
+
+    def _minimize_web_player_bar(self) -> None:
+        try:
+            self.view.page().runJavaScript(MINIMIZE_BAR_JS, self._on_minimize_result)
+        except Exception as exc:
+            log.warning("minimize bar failed: %s", exc)
+
+    def _on_minimize_result(self, result) -> None:
+        if isinstance(result, int) and result > 0:
+            log.info("minimized %d web player bar element(s)", result)
 
     def _set_active(self, btn):
         for b in (self.btn_home, self.btn_search, self.btn_library, self.btn_playlists, self.btn_favorites):
@@ -323,15 +367,18 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.settings_page)
 
     def _player_js(self, action: str) -> None:
-        js = {
-            "previous": "document.querySelector('[aria-label*=\"Previous\"], [data-testid*=\"previous\"]')?.click();",
-            "play": "document.querySelector('[aria-label*=\"Play\"],[aria-label*=\"Pause\"], [data-testid*=\"play\"]')?.click();",
-            "next": "document.querySelector('[aria-label*=\"Next\"], [data-testid*=\"next\"]')?.click();",
-            "shuffle": "document.querySelector('[aria-label*=\"Shuffle\"], [data-testid*=\"shuffle\"]')?.click();",
-            "repeat": "document.querySelector('[aria-label*=\"Repeat\"], [data-testid*=\"repeat\"]')?.click();",
-        }.get(action, "")
+        js = player_action_js(action)
         if js:
-            self.view.page().runJavaScript(js)
+            try:
+                self.view.page().runJavaScript(
+                    js, lambda ok, a=action: self._on_action_result(a, ok)
+                )
+            except Exception as exc:
+                log.warning("player action %s failed: %s", action, exc)
+
+    def _on_action_result(self, action: str, ok) -> None:
+        if not ok:
+            log.warning("player action %s: no matching control on page", action)
 
     def current_url(self) -> str:
         return self.view.url().toString()
@@ -355,72 +402,46 @@ class MainWindow(QMainWindow):
             log.error("clear site data failed: %s", exc)
 
     def _poll_now_playing(self):
-        js = (
-            "(function(){"
-            "var a=document.querySelector('audio');"
-            "return {title:document.title,"
-            "cur:a?a.currentTime:0,"
-            "dur:a?a.duration:0,"
-            "paused:a?a.paused:true};"
-            "})()"
-        )
+        # Re-apply bar minimization: the page builds its player UI lazily, so
+        # the bar may appear after loadFinished. Idempotent and cheap.
+        self._minimize_web_player_bar()
         try:
-            self.view.page().runJavaScript(js, self._on_np_result)
-        except Exception:
-            pass
+            self.view.page().runJavaScript(NOW_PLAYING_PROBE_JS, self._on_np_result)
+        except Exception as exc:
+            log.warning("now-playing poll failed: %s", exc)
 
     def _on_np_result(self, result):
-        if isinstance(result, dict):
-            title = result.get("title")
-            if isinstance(title, str) and title:
-                self.now_playing.set_track(title)
-                if self.queue_list.count() == 0 or self.queue_list.item(self.queue_list.count() - 1).text() != title:
-                    self.queue_list.addItem(title)
-            cur = result.get("cur", 0) or 0
-            dur = result.get("dur", 0) or 0
-            if dur and dur > 0:
-                self.progress.setValue(int(cur / dur * 100))
-            paused = result.get("paused", True)
-            self.play_btn.setText("▶" if paused else "⏸")
-        elif isinstance(result, str) and result:
-            self.now_playing.set_track(result)
+        state = parse_probe_result(result)
+        if state is None:
+            return
+        if state["title"]:
+            self.now_playing.set_track(state["title"])
+            self.track_label.setText(state["title"])
+            if self.queue_list.count() == 0 or self.queue_list.item(self.queue_list.count() - 1).text() != state["title"]:
+                self.queue_list.addItem(state["title"])
+        pct = track_progress_percent(state["cur"], state["dur"])
+        if pct is not None:
+            self.progress.setValue(pct)
+        self.play_btn.setText("▶" if state["paused"] else "⏸")
 
     def _on_url_changed(self, url):
         self.status_label.setText(url.host())
 
     def _on_load_started(self):
-        self.progress.setValue(0)
-        css = (
-            "var s=document.createElement('style');"
-            "s.textContent='[class*=\"Player\"],[class*=\"player\"],"
-            "[class*=\"now-playing\"],[class*=\"NowPlaying\"],"
-            "footer, [role=\"contentinfo\"]{display:none!important;visibility:hidden!important;}';"
-            "if(document.head) document.head.appendChild(s);"
-            "else document.addEventListener('DOMContentLoaded',function(){document.head.appendChild(s);});"
-        )
-        try:
-            self.view.page().runJavaScript(css)
-        except Exception:
-            pass
+        self.status_label.setText("Loading\u2026")
 
     def _on_load_progress(self, progress):
-        self.progress.setValue(progress)
+        self.status_label.setText(f"Loading\u2026 {progress}%")
 
     def _on_load_finished(self, ok):
         if not ok:
             self.status_label.setText("Failed to load")
             return
-        # Hide Amazon's own player bar so only the native bar is used
-        css = (
-            "var s=document.createElement('style');"
-            "s.textContent='[class*=\"Player\"],[class*=\"player-bar\"],"
-            "[class*=\"now-playing\"],footer{display:none!important;}';"
-            "document.head.appendChild(s);"
-        )
-        try:
-            self.view.page().runJavaScript(css)
-        except Exception:
-            pass
+        self.status_label.setText("")
+        # Visually minimize (never remove) the page's own player bar so the
+        # native bar is the primary control surface. Layout-preserving: the
+        # page player keeps running and drives the native bar via polling.
+        self._minimize_web_player_bar()
 
     def _on_render_terminated(self, status, code):
         log.error("render process terminated: status=%s code=%s", status, code)
