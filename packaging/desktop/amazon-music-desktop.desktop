@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Amazon Music Desktop
+Comment=Desktop client for Amazon Music
+Exec=amazon-music-desktop
+Icon=amazon-music-desktop
+Categories=Audio;Music;Player;Network;
+Terminal=false
+StartupNotify=true

@@ -1,0 +1,19 @@
+pkgname=amazon-music-desktop
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Desktop client for Amazon Music"
+arch=('any')
+url="https://example.com"
+license=('MIT')
+depends=('python' 'python-pyside6' 'qt6-webengine')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  install -d "$pkgdir/usr/lib/python3.11/site-packages"
+  cp -r src/amazon_music_desktop "$pkgdir/usr/lib/python3.11/site-packages/"
+  install -Dm755 packaging/debian/amazon-music-desktop-launcher "$pkgdir/usr/bin/amazon-music-desktop"
+  install -Dm644 packaging/desktop/amazon-music-desktop.desktop "$pkgdir/usr/share/applications/amazon-music-desktop.desktop"
+  install -Dm644 packaging/icons/app.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/amazon-music-desktop.png"
+}

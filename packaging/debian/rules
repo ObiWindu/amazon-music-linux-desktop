@@ -1,0 +1,13 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+override_dh_auto_install:
+	install -d debian/amazon-music-desktop/usr/lib/python3/dist-packages
+	cp -r src/amazon_music_desktop debian/amazon-music-desktop/usr/lib/python3/dist-packages/
+	install -d debian/amazon-music-desktop/usr/bin
+	install -m 755 packaging/debian/amazon-music-desktop-launcher debian/amazon-music-desktop/usr/bin/amazon-music-desktop
+	install -d debian/amazon-music-desktop/usr/share/applications
+	install -m 644 packaging/desktop/amazon-music-desktop.desktop debian/amazon-music-desktop/usr/share/applications/
+	install -d debian/amazon-music-desktop/usr/share/icons/hicolor/256x256/apps
+	install -m 644 packaging/icons/app.png debian/amazon-music-desktop/usr/share/icons/hicolor/256x256/apps/amazon-music-desktop.png
