@@ -397,6 +397,18 @@ class MainWindow(QMainWindow):
     def _on_load_finished(self, ok):
         if not ok:
             self.status_label.setText("Failed to load")
+            return
+        # Hide Amazon's own player bar so only the native bar is used
+        css = (
+            "var s=document.createElement('style');"
+            "s.textContent='[class*=\"Player\"],[class*=\"player-bar\"],"
+            "[class*=\"now-playing\"],footer{display:none!important;}';"
+            "document.head.appendChild(s);"
+        )
+        try:
+            self.view.page().runJavaScript(css)
+        except Exception:
+            pass
 
     def _on_render_terminated(self, status, code):
         log.error("render process terminated: status=%s code=%s", status, code)
