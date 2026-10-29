@@ -15,6 +15,9 @@ from ..browser.drm_diagnostics import (
     run_stage_a,
 )
 from ..services.health_check import collect_health
+from ..services.logging_service import get_logger
+
+log = get_logger("diagnostics")
 
 
 class DiagnosticsDialog(QDialog):
@@ -53,17 +56,16 @@ class DiagnosticsDialog(QDialog):
         self.text.setPlainText("Testing CDM session (creates MediaKeys + session)...")
         # QtWebEngine does not resolve returned Promises to Python, so the
         # probe stores its result on window and we read it back after a delay.
-        starter = (
-            "window.__amdCdmTest = null;\n"
-            f"void ({CDM_SESSION_PROBE_JS}).then(r => {{ window.__amdCdmTest = r; }});"
-            "'started';"
-        )
         try:
-            page.runJavaScript(starter)
+            page.runJavaScript(CDM_SESSION_PROBE_JS, self._on_probe_started)
         except Exception as exc:
             self.text.setPlainText(f"CDM session test failed to start: {exc}")
             return
-        QTimer.singleShot(4000, self._fetch_cdm_session_result)
+        QTimer.singleShot(6000, self._fetch_cdm_session_result)
+
+    def _on_probe_started(self, result) -> None:
+        if result != "started":
+            log.warning("CDM probe evaluate returned unexpected: %r", result)
 
     def _fetch_cdm_session_result(self) -> None:
         window = self.parent()
@@ -76,9 +78,17 @@ class DiagnosticsDialog(QDialog):
             self.text.setPlainText(f"CDM session test failed to read back: {exc}")
 
     def _on_cdm_session_result(self, result) -> None:
-        stage = parse_cdm_session_result(result)
+        if result is None:
+            raw = "None (probe script never ran: evaluation blocked or failed)"
+        elif not isinstance(result, dict):
+            raw = f"unexpected raw value: {result!r}"
+        else:
+            raw = None
         current = self.text.toPlainText()
-        self.text.setPlainText(current + "\n\n=== Widevine Stage C (live) ===\n" + format_stage(stage))
+        extra = f"\n\n=== Widevine Stage C (live) ===\n{raw}" if raw else (
+            "\n\n=== Widevine Stage C (live) ===\n" + format_stage(parse_cdm_session_result(result))
+        )
+        self.text.setPlainText(current + extra)
 
     def run(self) -> None:
         lines = []

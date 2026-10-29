@@ -25,20 +25,25 @@ WIDEVINE_CDM_FLAG = "--widevine-cdm-path"
 # NOTE: QtWebEngine does not resolve returned Promises to Python callbacks,
 # so callers must store the result (e.g. on window) and read it back later.
 CDM_SESSION_PROBE_JS = (
+    "window.__amdCdmTest = {ok: false, error: 'probe started, no result yet'};"
     "(async () => {"
     "try {"
+    "window.__amdCdmTest = {ok: false, error: 'stage: requesting key system...'};"
     "const access = await navigator.requestMediaKeySystemAccess("
     "'com.widevine.alpha', [{"
     "initDataTypes: ['cenc'],"
     "audioCapabilities: [{contentType: 'audio/mp4; codecs=\"mp4a.40.2\"'}],"
     "videoCapabilities: [{contentType: 'video/mp4; codecs=\"avc1.42E01E\"'}]"
     "}]);"
+    "window.__amdCdmTest = {ok: false, error: 'stage: creating MediaKeys...'};"
     "const keys = await access.createMediaKeys();"
+    "window.__amdCdmTest = {ok: false, error: 'stage: creating session...'};"
     "const session = keys.createSession();"
     "if (!session) throw new Error('createSession returned null');"
-    "return {ok: true, keySystem: access.keySystem};"
-    "} catch (e) { return {ok: false, error: (e && e.name ? e.name + ': ' : '') + (e && e.message ? e.message : e)}; }"
-    "})()"
+    "window.__amdCdmTest = {ok: true, keySystem: access.keySystem};"
+    "} catch (e) { window.__amdCdmTest = {ok: false, error: (e && e.name ? e.name + ': ' : '') + (e && e.message ? e.message : e)}; }"
+    "})();"
+    "'started';"
 )
 
 
