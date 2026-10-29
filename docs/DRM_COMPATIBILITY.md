@@ -7,10 +7,14 @@
 - User-level CDM: component-updated builds under
   `~/.config/<app>/WidevineCdm/<version>/_platform_specific/linux_arm64/`
   (for example 4.10.3112.0).
-- Discovery: the app scans the system install, `~/.config/chromium`,
-  `~/.config/google-chrome`, and versioned `WidevineCdm` directories from
-  Chromium-based applications. It selects the newest readable CDM whose ELF
-  architecture matches the host.
+- Bundled CDM: an RPM built with `--define 'bundled_cdm <path>'` installs the
+  CDM under `/usr/lib64/amazon-music-desktop/WidevineCdm/` (or
+  `/usr/lib/amazon-music-desktop/WidevineCdm/` on non-Fedora layouts). Such a
+  build is for local use only and must not be redistributed.
+- Discovery: the app scans the system install, the optional bundled directory,
+  `~/.config/chromium`, `~/.config/google-chrome`, and versioned `WidevineCdm`
+  directories from Chromium-based applications. It selects the newest readable
+  CDM whose ELF architecture matches the host.
 - Initialization: the selected library is passed to QtWebEngine as
   `--widevine-cdm-path=<cdm>` via `QTWEBENGINE_CHROMIUM_FLAGS` before engine
   init. The app also creates or updates the user-level `WidevineCdm`

@@ -19,6 +19,14 @@ CDM_PATH = Path("/var/lib/widevine/libwidevinecdm.so")
 WIDEVINE_CDM_DIR = Path("/var/lib/widevine/WidevineCdm")
 WIDEVINE_CDM_FLAG = "--widevine-cdm-path"
 
+# Optional CDM installed by an RPM built with --define 'bundled_cdm ...'.
+# Keep both libdir spellings so the same package layout works on Fedora
+# (/usr/lib64) and Debian-style systems (/usr/lib).
+BUNDLED_CDM_DIRS: tuple[Path, ...] = (
+    Path("/usr/lib64/amazon-music-desktop/WidevineCdm"),
+    Path("/usr/lib/amazon-music-desktop/WidevineCdm"),
+)
+
 # Chromium's component-updated Widevine CDM lives under
 # <profile>/WidevineCdm/<version>/_platform_specific/<platform>/.
 # Older installs (and Qt's linux_x64 workaround) use an unversioned
@@ -146,7 +154,7 @@ def cdm_version(cdm: Path | None = None) -> str:
 def _widevine_roots() -> list[Path]:
     """Return system and per-application WidevineCdm directories."""
     home = Path.home()
-    roots: list[Path] = [WIDEVINE_CDM_DIR]
+    roots: list[Path] = [WIDEVINE_CDM_DIR, *BUNDLED_CDM_DIRS]
     for base in (home / ".config", home / ".local" / "share"):
         try:
             roots.extend(sorted(base.glob("*/WidevineCdm")))

@@ -30,6 +30,7 @@ def test_find_usable_cdm_missing(tmp_path, monkeypatch):
     import amazon_music_desktop.browser.drm_diagnostics as d
     monkeypatch.setattr(d, "CDM_PATH", tmp_path / "nope.so")
     monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "WidevineCdm")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     assert d.find_usable_cdm() is None
 
@@ -52,6 +53,7 @@ def test_configure_widevine_sets_env(tmp_path, monkeypatch):
     cdm.write_bytes(b"x" * 64)
     monkeypatch.setattr(d, "CDM_PATH", cdm)
     monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "WidevineCdm")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     monkeypatch.delenv("QTWEBENGINE_CHROMIUM_FLAGS", raising=False)
     assert d.configure_widevine() == cdm
@@ -77,11 +79,33 @@ def test_find_usable_cdm_prefers_newest_user_component(tmp_path, monkeypatch):
 
     monkeypatch.setattr(d, "CDM_PATH", old)
     monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "system" / "WidevineCdm")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
     monkeypatch.setattr("pathlib.Path.home", lambda: home)
     monkeypatch.setattr(d.platform, "machine", lambda: "aarch64")
 
     assert d.find_usable_cdm() == new
     assert d.cdm_version() == "4.10.3112.0"
+
+
+def test_find_usable_cdm_in_bundled_rpm_dir(tmp_path, monkeypatch):
+    import json
+
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    bundled = tmp_path / "usr" / "lib64" / "amazon-music-desktop" / "WidevineCdm"
+    cdm = bundled / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
+    cdm.parent.mkdir(parents=True)
+    cdm.write_bytes(b"bundled")
+    (bundled / "manifest.json").write_text(json.dumps({"version": "4.10.3112.0"}))
+
+    monkeypatch.setattr(d, "CDM_PATH", tmp_path / "nope.so")
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "system" / "WidevineCdm")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", (bundled,))
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    monkeypatch.setattr(d.platform, "machine", lambda: "aarch64")
+
+    assert d.find_usable_cdm() == cdm
+    assert d.cdm_version(cdm) == "4.10.3112.0"
 
 
 def test_ensure_widevine_user_dir_updates_old_system_link(tmp_path, monkeypatch):
@@ -109,6 +133,7 @@ def test_ensure_widevine_user_dir_updates_old_system_link(tmp_path, monkeypatch)
 
     monkeypatch.setattr(d, "CDM_PATH", old)
     monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "system" / "WidevineCdm")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
     monkeypatch.setattr("pathlib.Path.home", lambda: home)
     monkeypatch.setattr(d.platform, "machine", lambda: "aarch64")
 

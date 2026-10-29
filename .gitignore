@@ -1,3 +1,5 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+# Local-only RPM containing the proprietary Widevine CDM.
+evidence/release/*.aarch64.rpm

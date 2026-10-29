@@ -28,12 +28,14 @@ A native desktop application for Amazon Music on Linux, built with Python 3, PyS
 
 ### Widevine CDM
 
-Widevine is required for protected playback. The application does not bundle the proprietary CDM (licensing). Install it per distribution:
+Widevine is required for protected playback. The default RPM does not bundle the proprietary CDM (licensing). Install it per distribution:
 
 - **Fedora / Fedora Asahi Remix**: `sudo dnf install widevine-installer` (provides `/var/lib/widevine/libwidevinecdm.so`). On Apple Silicon, the installer handles the 16K-page-size fixup.
 - **Fedora codecs note**: AAC/MP3 decode verified working in stock `qt6-qtwebengine` 6.11.2. On Fedora the freeworld codec library is `libavcodec-freeworld` (RPM Fusion free); no `qt6-qtwebengine-freeworld` build is published for Fedora 44 aarch64, and it isn't needed for in-app audio. If protected playback fails after ~1 second, the cause is on the Widevine side — use **Diagnostics → Test CDM session** and check the CDM version it reports. The app prefers the newest CDM it can find, including component-updated builds under `~/.config/<app>/WidevineCdm/<version>/`.
 - **Debian / Ubuntu**: install `chromium-widevine` (or Google Chrome) which provides a `WidevineCdm` directory under `~/.config/chromium` or `/usr/lib/chromium`.
 - **Arch Linux**: install `chromium-widevine` from the AUR, or `google-chrome`.
+
+For a private, local-only RPM that embeds an already-installed CDM, see `packaging/widevine/README.md`. Do not redistribute that build: Google's Widevine license prohibits it.
 
 On first launch, the app creates or updates `~/.config/chromium/WidevineCdm` and `~/.config/google-chrome/WidevineCdm` to point at the newest CDM it finds (the distro package or a newer component-updated build). Run **Diagnostics** from the sidebar to verify detection and the CDM version in use.
 
