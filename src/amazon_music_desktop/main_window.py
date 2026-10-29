@@ -259,6 +259,9 @@ class MainWindow(QMainWindow):
         ws.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
         ws.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, False)
         ws.setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, True)
+        # The native bar drives the page's media element programmatically;
+        # without this QtWebEngine blocks play() outside a user gesture.
+        ws.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
 
         # signals
         self.view.urlChanged.connect(self._on_url_changed)

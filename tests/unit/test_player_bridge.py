@@ -17,10 +17,39 @@ def test_bridge_does_not_mutate_page_player_dom():
 
 
 def test_player_action_known():
-    js = player_action_js("play")
+    js = player_action_js("next")
     assert "click()" in js
-    assert "return true" in js
-    assert "return false" in js
+    assert "'clicked'" in js
+    assert "return ''" in js
+
+
+def test_play_drives_media_element_directly():
+    js = player_action_js("play")
+    assert "querySelectorAll('audio,video')" in js
+    assert ".play()" in js
+    assert ".pause()" in js
+
+
+def test_play_fallback_matches_french_labels():
+    js = player_action_js("play")
+    assert "Écouter" in js
+    assert "Pause" in js
+
+
+def test_controls_match_french_labels():
+    assert "Précédent" in player_action_js("previous")
+    assert "Suivant" in player_action_js("next")
+    assert "aléatoire" in player_action_js("shuffle")
+    assert "Répéter" in player_action_js("repeat")
+
+
+def test_controls_exclude_carousel_pagers():
+    # "Voir l'élément suivant/précédent dans ..." pages a shelf, not a track;
+    # "*_PreviousPageButton"/"*_NextPageButton" are carousel controls.
+    for action in ("previous", "next"):
+        js = player_action_js(action)
+        assert "voir l'" in js
+        assert "pagebutton" in js
 
 
 def test_player_action_unknown():

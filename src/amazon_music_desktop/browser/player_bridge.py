@@ -17,13 +17,56 @@ from __future__ import annotations
 
 from typing import Any
 
-_ACTION_SELECTORS: dict[str, str] = {
-    "previous": "[aria-label*=\"Previous\"], [data-testid*=\"previous\"]",
-    "play": "[aria-label*=\"Play\"],[aria-label*=\"Pause\"], [data-testid*=\"play\"]",
-    "next": "[aria-label*=\"Next\"], [data-testid*=\"next\"]",
-    "shuffle": "[aria-label*=\"Shuffle\"], [data-testid*=\"shuffle\"]",
-    "repeat": "[aria-label*=\"Repeat\"], [data-testid*=\"repeat\"]",
+# Locales observed live on music.amazon.fr (2026-10-29): play buttons are
+# labeled "Écouter" (page header data-testid "pageHeaderPlay_Play_Button"),
+# carousel/shelf pagers read "Voir l'élément suivant/précédent dans ..." with
+# data-testid "*_PreviousPageButton"/"*_NextPageButton". Native controls must
+# match fr + en labels, and must never hit the carousel pagers.
+_ACTION_SELECTORS: dict[str, tuple[str, ...]] = {
+    "previous": (
+        'button[aria-label*="Précédent" i]',
+        'button[aria-label*="Previous" i]',
+        'button[data-testid*="prev" i]',
+    ),
+    "next": (
+        'button[aria-label*="Suivant" i]',
+        'button[aria-label*="Next" i]',
+        'button[data-testid*="next" i]',
+    ),
+    "shuffle": (
+        'button[aria-label*="aléatoire" i]',
+        'button[aria-label*="Shuffle" i]',
+        'button[data-testid*="shuffle" i]',
+    ),
+    "repeat": (
+        'button[aria-label*="Répéter" i]',
+        'button[aria-label*="Repeat" i]',
+        'button[data-testid*="repeat" i]',
+    ),
 }
+
+# Buttons whose label/testid matches this are carousel/shelf pagers or
+# non-transport controls; "next"/"previous" must never page a shelf instead
+# of skipping the track.
+_EXCLUDE_RE = "voir l'|pagebutton|autoplay"
+
+# Play/pause drives the page's media element directly (locale-independent),
+# falling back to a control button (fr + en) when no media element exists.
+_PLAY_JS = (
+    "(function(){"
+    "var els=document.querySelectorAll('audio,video');"
+    "for(var i=0;i<els.length;i++){var el=els[i];"
+    "if(el.currentSrc||el.src){"
+    "if(el.paused){var p=el.play();if(p&&p.catch)p.catch(function(){});return 'play';}"
+    "el.pause();return 'pause';}}"
+    "var sels=['button[aria-label*=\"Pause\" i]','button[aria-label*=\"Écouter\" i]',"
+    "'button[aria-label*=\"Lecture\" i]','button[aria-label*=\"Lire\" i]',"
+    "'button[aria-label*=\"Play\" i]','button[data-testid*=\"play\" i]'];"
+    "for(var j=0;j<sels.length;j++){var b=document.querySelector(sels[j]);"
+    "if(b){b.click();return 'clicked';}}"
+    "return '';"
+    "})()"
+)
 
 # Probe the page player state. Returns {title, cur, dur, paused}.
 # Runs against the first <audio> element (Amazon's playback element).
@@ -39,17 +82,36 @@ NOW_PLAYING_PROBE_JS = (
 
 
 def player_action_js(action: str) -> str:
-    """Return JS that clicks the page control for *action*.
+    """Return JS that performs *action* against the page player.
 
-    Returns "" for unknown actions. The snippet returns true when a control
-    was found and clicked, false otherwise, so callers can log misses.
+    Returns "" for unknown actions. The snippet returns a truthy string
+    describing what was done, or "" when no control matched, so callers can
+    log misses. Play/pause goes through the media element itself; the other
+    actions click the page's transport buttons (fr + en labels, carousel
+    pagers excluded).
     """
-    selector = _ACTION_SELECTORS.get(action)
-    if selector is None:
+    if action == "play":
+        return _PLAY_JS
+    selectors = _ACTION_SELECTORS.get(action)
+    if selectors is None:
         return ""
+    import json
+
     return (
-        f"(function(){{var b=document.querySelector('{selector}');"
-        "if(!b) return false; b.click(); return true;})()"
+        "(function(){"
+        f"var sels={json.dumps(selectors, ensure_ascii=False)};"
+        f"var ex=/{_EXCLUDE_RE}/i;"
+        "for(var j=0;j<sels.length;j++){"
+        "var bs=document.querySelectorAll(sels[j]);"
+        "for(var i=0;i<bs.length;i++){var b=bs[i];"
+        "var t=(b.getAttribute('aria-label')||'')+' '+(b.getAttribute('data-testid')||'');"
+        "var r=b.getBoundingClientRect();"
+        "if(ex.test(t))continue;"
+        "if(r.width<8||r.height<8)continue;"
+        "b.click();return 'clicked';}}"
+        "}"
+        "return '';"
+        "})()"
     )
 
 
