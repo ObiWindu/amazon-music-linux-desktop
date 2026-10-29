@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication
 
-from .browser.drm_diagnostics import ensure_widevine_user_dir
+from .browser.drm_diagnostics import configure_widevine, detect_freeworld, ensure_widevine_user_dir
 from .browser.profile import ProfileManager
 from .main_window import MainWindow
 from .services.configuration import ConfigService, ensure_dirs
@@ -34,6 +34,15 @@ def main(argv: list[str] | None = None) -> int:
 
     ensure_dirs()
     ensure_widevine_user_dir()
+    cdm = configure_widevine()
+    if cdm is None:
+        log.warning("starting without Widevine CDM: protected playback will fail")
+    freeworld = detect_freeworld()
+    if freeworld is False:
+        log.warning(
+            "qt6-qtwebengine-freeworld is not installed; stock Fedora WebEngine "
+            "lacks proprietary codecs required for protected playback"
+        )
 
     app = QApplication(argv)
     app.setApplicationName("Amazon Music Desktop")

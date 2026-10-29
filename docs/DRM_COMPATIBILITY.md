@@ -6,6 +6,7 @@
 - Architecture: aarch64 (ELF 64-bit)
 - Dependencies: resolved (ldd)
 - EME: com.widevine.alpha available (tested)
-- CDM initialization: Qt WebEngine discovers Widevine via ~/.config/chromium/WidevineCdm (user-level) or system path. App ensures user-level dir on startup.
+- CDM initialization: the app passes `--widevine-cdm-path=<cdm>` via `QTWEBENGINE_CHROMIUM_FLAGS` before engine init (system CDM preferred, user-level fallback). App also ensures the user-level WidevineCdm dir on startup.
+- Fedora requires `qt6-qtwebengine-freeworld` (RPM Fusion) for proprietary codecs; without it protected playback fails.
 - Amazon playback: requires valid account/subscription; not verified in this environment.
 - Known limitation: Qt build hardcodes linux_x64 Widevine path; user-level symlink workaround used.

@@ -7,6 +7,8 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QPushButton, QTextEdit, QVBo
 from ..browser.drm_diagnostics import (
     CDM_PATH,
     browser_info,
+    detect_freeworld,
+    find_usable_cdm,
     format_stage,
     run_stage_a,
 )
@@ -46,4 +48,9 @@ class DiagnosticsDialog(QDialog):
         lines.append(format_stage(run_stage_a()))
         lines.append("")
         lines.append(f"CDM path: {CDM_PATH}")
+        lines.append(f"CDM in use: {find_usable_cdm()}")
+        freeworld = detect_freeworld()
+        lines.append(f"freeworld WebEngine (proprietary codecs): {freeworld}")
+        if freeworld is False:
+            lines.append("  -> install qt6-qtwebengine-freeworld from RPM Fusion for DRM playback")
         self.text.setPlainText("\n".join(lines))

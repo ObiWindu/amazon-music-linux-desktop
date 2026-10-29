@@ -16,6 +16,70 @@ log = get_logger("drm")
 
 CDM_PATH = Path("/var/lib/widevine/libwidevinecdm.so")
 WIDEVINE_CDM_DIR = Path("/var/lib/widevine/WidevineCdm")
+WIDEVINE_CDM_FLAG = "--widevine-cdm-path"
+
+
+def _user_cdm_candidates() -> list[Path]:
+    home = Path.home()
+    return [
+        home / ".config" / "chromium" / "WidevineCdm" / "_platform_specific" / "linux_x64" / "libwidevinecdm.so",
+        home / ".config" / "google-chrome" / "WidevineCdm" / "_platform_specific" / "linux_x64" / "libwidevinecdm.so",
+    ]
+
+
+def find_usable_cdm() -> Path | None:
+    """Return the first readable CDM library, system install preferred."""
+    for cand in [CDM_PATH, *_user_cdm_candidates()]:
+        try:
+            if cand.exists() and os.access(cand, os.R_OK) and cand.stat().st_size > 0:
+                return cand
+        except OSError:
+            continue
+    return None
+
+
+def build_widevine_flags(cdm: Path | None, existing: str = "") -> str:
+    """Append the Widevine CDM flag if a CDM exists and no flag is set yet."""
+    if WIDEVINE_CDM_FLAG in existing:
+        return existing.strip()
+    if cdm is None:
+        return existing.strip()
+    flag = f"{WIDEVINE_CDM_FLAG}={cdm}"
+    return f"{existing} {flag}".strip() if existing.strip() else flag
+
+
+def configure_widevine() -> Path | None:
+    """Point QtWebEngine at the Widevine CDM before it initializes.
+
+    Must run before QApplication is constructed (Chromium reads
+    QTWEBENGINE_CHROMIUM_FLAGS at engine init). Returns the CDM in use.
+    """
+    cdm = find_usable_cdm()
+    current = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+    updated = build_widevine_flags(cdm, current)
+    if updated != current:
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = updated
+    if cdm is None:
+        log.warning("no usable Widevine CDM found; protected playback will fail")
+    else:
+        log.info("using Widevine CDM at %s", cdm)
+    return cdm
+
+
+def detect_freeworld() -> bool | None:
+    """Check for the RPM Fusion freeworld WebEngine (proprietary codecs).
+
+    Returns True/False on rpm systems, None when rpm is unavailable.
+    Stock Fedora QtWebEngine lacks proprietary codecs needed for DRM media.
+    """
+    try:
+        proc = subprocess.run(
+            ["rpm", "-q", "qt6-qtwebengine-freeworld"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+    except Exception:
+        return None
+    return proc.returncode == 0
 
 
 @dataclass
