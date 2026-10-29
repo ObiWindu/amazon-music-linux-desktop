@@ -150,6 +150,8 @@ class MainWindow(QMainWindow):
         self.play_btn = QPushButton("▶")
         self.next_btn = QPushButton("⏭")
         self.repeat_btn = QPushButton("🔁")
+        for b in (self.shuffle_btn, self.repeat_btn):
+            b.setStyleSheet("background: transparent; border: none; color: #cdd6f4;")
         for b in (self.shuffle_btn, self.prev_btn, self.play_btn, self.next_btn, self.repeat_btn):
             b.setFixedWidth(40)
         top_row.addWidget(self.shuffle_btn)
