@@ -92,15 +92,32 @@ def test_probe_js_reads_audio_element_with_volume():
     assert "paused" in NOW_PLAYING_PROBE_JS
     assert "vol:a?a.volume:1" in NOW_PLAYING_PROBE_JS
     assert "muted:a?a.muted:false" in NOW_PLAYING_PROBE_JS
+    # Real track identity comes from mediaSession when available; the page
+    # keeps the *playlist* name in document.title while browsing.
+    assert "mediaSession" in NOW_PLAYING_PROBE_JS
+    assert "md.title" in NOW_PLAYING_PROBE_JS
+    assert "md.artist" in NOW_PLAYING_PROBE_JS
+    assert "document.title" in NOW_PLAYING_PROBE_JS
     # QtWebEngine 6.11 delivers object results as ''; probes must stringify.
     assert "JSON.stringify" in NOW_PLAYING_PROBE_JS
 
 
 def test_parse_probe_result_accepts_json_string():
     state = parse_probe_result(
-        json.dumps({"title": "Song", "cur": 30, "dur": 120, "paused": False, "vol": 0.7, "muted": True})
+        json.dumps(
+            {
+                "title": "Song",
+                "artist": "Performer",
+                "cur": 30,
+                "dur": 120,
+                "paused": False,
+                "vol": 0.7,
+                "muted": True,
+            }
+        )
     )
     assert state["title"] == "Song"
+    assert state["artist"] == "Performer"
     assert state["cur"] == 30.0
     assert state["dur"] == 120.0
     assert state["paused"] is False
@@ -114,6 +131,7 @@ def test_parse_probe_result_valid():
     state = parse_probe_result({"title": "Song", "cur": 30, "dur": 120, "paused": False})
     assert state == {
         "title": "Song",
+        "artist": "",
         "cur": 30.0,
         "dur": 120.0,
         "paused": False,
@@ -123,9 +141,10 @@ def test_parse_probe_result_valid():
 
 
 def test_parse_probe_result_clamps_volume():
-    state = parse_probe_result({"title": "", "cur": "x", "dur": None, "paused": 0, "vol": 4.2, "muted": 1})
+    state = parse_probe_result({"title": "", "cur": "x", "dur": None, "paused": 0, "vol": 4.2, "muted": 1, "artist": 3})
     assert state["volume"] == 1.0
     assert state["muted"] is True
+    assert state["artist"] == ""
     assert state["cur"] == 0.0
     assert state["dur"] == 0.0
 
@@ -154,3 +173,25 @@ def test_volume_js_sets_both():
     assert "a.muted=true" in js
     assert volume_js(None, None) == ""
     assert "a.muted=false" in volume_js(None, False)
+
+
+def test_queue_probe_targets_queue_rows():
+    from amazon_music_desktop.browser.player_bridge import QUEUE_PROBE_JS
+
+    assert 'data-testid*="queueItem"' in QUEUE_PROBE_JS
+    assert "up-next" in QUEUE_PROBE_JS
+    assert "JSON.stringify" in QUEUE_PROBE_JS
+
+
+def test_parse_queue_result_valid_and_invalid():
+    from amazon_music_desktop.browser.player_bridge import QUEUE_PROBE_JS, parse_queue_result
+
+    songs = parse_queue_result(json.dumps({"items": ["1. Track A", "2. Track B"]}))
+    assert songs == ["1. Track A", "2. Track B"]
+    assert parse_queue_result(json.dumps({"items": []})) == []
+    assert parse_queue_result(json.dumps({"items": [3, "x", None]})) == ["x"]
+    assert parse_queue_result(None) is None
+    assert parse_queue_result("not json") is None
+    assert parse_queue_result({"no": "items"}) is None
+    # The JS must return a JSON *string* (QtWebEngine drops objects).
+    assert QUEUE_PROBE_JS.endswith("})()")

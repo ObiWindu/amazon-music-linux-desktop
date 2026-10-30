@@ -83,16 +83,46 @@ _PLAY_LABEL_WORDS = ("play", "pause", "lecture", "lire", "Écouter")
 # Probe the page player state. Returns a JSON string because QtWebEngine
 # 6.11 delivers only primitive values from runJavaScript (objects and
 # arrays arrive as ''); parses back to a flat state dict.
+#
+# document.title is NOT a reliable track name: while browsing a playlist the
+# page keeps the playlist name there. navigator.mediaSession.metadata carries
+# the real now-playing song (title/artist) when the page exposes it, so it
+# wins when present.
 NOW_PLAYING_PROBE_JS = (
     "(function(){"
     "var a=document.querySelector('audio');"
+    "var md=(navigator.mediaSession&&navigator.mediaSession.metadata)?navigator.mediaSession.metadata:null;"
     "return JSON.stringify({"
-    "title:document.title,"
+    "title:(md&&md.title)?md.title:document.title,"
+    "artist:(md&&md.artist)?md.artist:'',"
     "cur:a?a.currentTime:0,"
     "dur:a?a.duration:0,"
     "paused:a?a.paused:true,"
     "vol:a?a.volume:1,"
     "muted:a?a.muted:false});"
+    "})()"
+)
+
+# Best-effort scrape of the page's own up-next queue rows. Tests use several
+# naming conventions because Amazon's internals differ per build; an empty
+# result simply means "unavailable" and the native panel keeps the songs it
+# has actually seen play.
+QUEUE_PROBE_JS = (
+    "(function(){"
+    "var sel=["
+    "'[data-testid*=\"queueItem\" i]',"
+    "'[data-testid*=\"queue-item\" i]',"
+    "'[data-testid*=\"playQueueItem\" i]',"
+    "'[data-testid*=\"upNext\" i]',"
+    "'[data-testid*=\"up-next\" i]'"
+    "].join(',');"
+    "var rows=document.querySelectorAll(sel);"
+    "var items=[];"
+    "for(var i=0;i<rows.length;i++){"
+    "var t=(rows[i].getAttribute('aria-label')||rows[i].textContent||'');"
+    "t=t.replace(/\\s+/g,' ').trim().slice(0,80);"
+    "if(t)items.push(t);}"
+    "return JSON.stringify({items:items.slice(0,40)});"
     "})()"
 )
 
@@ -268,14 +298,31 @@ def parse_probe_result(result: Any) -> dict[str, Any] | None:
 
     title = result.get("title")
     volume = min(_float(result.get("vol"), 1.0), 1.0)
+    artist = result.get("artist")
     return {
         "title": title if isinstance(title, str) and title else "",
+        "artist": artist if isinstance(artist, str) else "",
         "cur": _float(result.get("cur")),
         "dur": _float(result.get("dur")),
         "paused": bool(result.get("paused", True)),
         "volume": volume,
         "muted": bool(result.get("muted", False)),
     }
+
+
+def parse_queue_result(result: Any) -> list[str] | None:
+    """Normalize the queue-scrape payload. None when unusable."""
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(result, dict):
+        return None
+    items = result.get("items")
+    if not isinstance(items, list):
+        return None
+    return [str(item) for item in items if isinstance(item, str) and item.strip()]
 
 
 def track_progress_percent(cur: float, dur: float) -> int | None:

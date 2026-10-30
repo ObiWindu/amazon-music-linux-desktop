@@ -25,7 +25,9 @@ from .browser.download_policy import default_download_dir, safe_filename, valida
 from .browser.navigation import NavigationDecision, NavigationPolicy
 from .browser.player_bridge import (
     NOW_PLAYING_PROBE_JS,
+    QUEUE_PROBE_JS,
     parse_probe_result,
+    parse_queue_result,
     player_action_js,
     seek_js,
     volume_js,
@@ -36,6 +38,7 @@ from .services.desktop_integration import create_tray, tray_available
 from .services.logging_service import get_logger
 from .ui.now_playing import NowPlayingWidget
 from .ui.player_bar import PlayerBar
+from .ui.queue_panel import QueuePanel
 from .ui.settings_page import SettingsPage
 
 log = get_logger("main_window")
@@ -118,6 +121,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Amazon Music Desktop")
         self.setMinimumSize(QSize(1000, 640))
         self._last_dur = 0.0
+        self._track_key = ""
+        self._poll_count = 0
 
         # central: sidebar + stacked content
         central = QWidget(self)
@@ -200,28 +205,15 @@ class MainWindow(QMainWindow):
         outer_layout = QVBoxLayout(central2)
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
-        # top row: sidebar + stack
+        # top row: sidebar + left queue panel + stack
+        self.queue_panel = QueuePanel()
         top_row = QWidget()
         tr = QHBoxLayout(top_row)
         tr.setContentsMargins(0, 0, 0, 0)
         tr.setSpacing(0)
         tr.addWidget(sidebar)
-        tr.addWidget(self.stack, 1)
-
-        # right queue panel
-        self.queue_panel = QFrame()
-        self.queue_panel.setFixedWidth(260)
-        self.queue_panel.setStyleSheet("background: #181825; border-left: 1px solid #313244;")
-        qp = QVBoxLayout(self.queue_panel)
-        qp.setContentsMargins(10, 16, 10, 16)
-        qtitle = QLabel("Queue")
-        qtitle.setStyleSheet("color: #cba6f7; font-size: 16px; font-weight: bold;")
-        qp.addWidget(qtitle)
-        from PySide6.QtWidgets import QListWidget
-        self.queue_list = QListWidget()
-        self.queue_list.setStyleSheet("background: #1e1e2e; color: #cdd6f4; border: none;")
-        qp.addWidget(self.queue_list, 1)
         tr.addWidget(self.queue_panel)
+        tr.addWidget(self.stack, 1)
 
         outer_layout.addWidget(top_row, 1)
         outer_layout.addWidget(self.player_bar)
@@ -383,23 +375,38 @@ class MainWindow(QMainWindow):
     def _poll_now_playing(self):
         # Read-only probe of the page player state. The page DOM is never
         # modified from here (see _BrowserHost for player-bar suppression).
+        self._poll_count = (self._poll_count + 1) % 5
         try:
             self.view.page().runJavaScript(NOW_PLAYING_PROBE_JS, self._on_np_result)
+            if self._poll_count == 0 and self.queue_panel.list.isVisible():
+                self.view.page().runJavaScript(QUEUE_PROBE_JS, self._on_queue_result)
         except Exception as exc:
             log.warning("now-playing poll failed: %s", exc)
+
+    def _on_queue_result(self, result):
+        songs = parse_queue_result(result)
+        if songs:
+            # The page exposed its *real* up-next queue; that overrides the
+            # locally tracked session songs until it goes away again.
+            self.queue_panel.set_upcoming(songs)
 
     def _on_np_result(self, result):
         state = parse_probe_result(result)
         if state is None:
             return
         self._last_dur = float(state["dur"])
-        title = state["title"]
-        if title:
+        title = state.get("title") or ""
+        artist = state.get("artist") or ""
+        playing = state["dur"] > 0 and not state["paused"]
+        if title and title != self._track_key:
+            self._track_key = title
             self.now_playing.set_track(title)
-            if self.queue_list.count() == 0 or self.queue_list.item(self.queue_list.count() - 1).text() != title:
-                self.queue_list.addItem(title)
+        if playing and title:
+            # Track-only feed: document.title ("Playlist - Amazon Music") and
+            # other page-title junk never reach the queue panel.
+            self.queue_panel.on_track(title, artist)
         self.player_bar.set_state(state)
-        self.now_playing.set_playing(not state["paused"] and state["dur"] > 0)
+        self.now_playing.set_playing(playing)
 
     def _on_url_changed(self, url):
         self.status_label.setText(url.host())
