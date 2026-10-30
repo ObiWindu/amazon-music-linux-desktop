@@ -1,9 +1,16 @@
 from pathlib import Path
 
+import pytest
+
 from amazon_music_desktop.browser.drm_diagnostics import (
     _elf_arch,
     check_library_presence,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_qt_flags(monkeypatch):
+    monkeypatch.delenv("QTWEBENGINE_CHROMIUM_FLAGS", raising=False)
 
 
 def test_elf_arch_real_cdm():
@@ -85,6 +92,20 @@ def test_find_usable_cdm_prefers_newest_user_component(tmp_path, monkeypatch):
 
     assert d.find_usable_cdm() == new
     assert d.cdm_version() == "4.10.3112.0"
+
+
+def test_find_usable_cdm_honors_explicit_flag(tmp_path, monkeypatch):
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    cdm = tmp_path / "libwidevinecdm.so"
+    cdm.write_bytes(b"x" * 64)
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", f"--widevine-cdm-path={cdm}")
+    monkeypatch.setattr(d, "CDM_PATH", tmp_path / "nope.so")
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "WidevineCdm")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    assert d.find_usable_cdm() == cdm
 
 
 def test_find_usable_cdm_in_bundled_rpm_dir(tmp_path, monkeypatch):

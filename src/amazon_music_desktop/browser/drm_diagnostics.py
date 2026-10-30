@@ -203,15 +203,34 @@ def _candidate_paths() -> list[Path]:
     return unique
 
 
+def _explicit_cdm() -> Path | None:
+    """Return a CDM explicitly requested via QTWEBENGINE_CHROMIUM_FLAGS."""
+    flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+    for token in flags.split():
+        if not token.startswith(f"{WIDEVINE_CDM_FLAG}="):
+            continue
+        candidate = Path(token.split("=", 1)[1])
+        try:
+            if candidate.is_file() and os.access(candidate, os.R_OK):
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
 def find_usable_cdm() -> Path | None:
     """Return the newest readable, architecture-compatible CDM library.
 
-    Chromium-based applications keep a component-updated CDM under
+    An explicit ``--widevine-cdm-path`` in QTWEBENGINE_CHROMIUM_FLAGS wins.
+    Otherwise, Chromium-based applications keep a component-updated CDM under
     ``~/.config/<app>/WidevineCdm`` (sometimes versioned). Those builds can
     be much newer than the distro package; prefer the newest one because
     Amazon's license service rejects older ARM64 CDMs with
     VMP_VALIDATION_FAILED.
     """
+    explicit = _explicit_cdm()
+    if explicit is not None:
+        return explicit
     host_arch = _host_elf_arch()
     best: Path | None = None
     best_key: tuple[Any, ...] | None = None
