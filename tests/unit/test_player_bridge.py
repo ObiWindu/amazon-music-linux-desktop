@@ -86,12 +86,12 @@ def test_offset_map_addresses_transport_cluster():
     assert '"previous": -1' in js or '"previous":-1' in js
 
 
-def test_probe_js_reads_audio_element_with_volume():
-    assert "querySelector('audio')" in NOW_PLAYING_PROBE_JS
+def test_probe_js_reads_media_element_with_volume():
+    assert "querySelector('audio,video')" in NOW_PLAYING_PROBE_JS
     assert "currentTime" in NOW_PLAYING_PROBE_JS
     assert "paused" in NOW_PLAYING_PROBE_JS
     assert "vol:a?a.volume:1" in NOW_PLAYING_PROBE_JS
-    assert "muted:a?a.muted:false" in NOW_PLAYING_PROBE_JS
+    assert "muted:a?(!!a.muted):false" in NOW_PLAYING_PROBE_JS
     # Real track identity comes from mediaSession when available; the page
     # keeps the *playlist* name in document.title while browsing.
     assert "mediaSession" in NOW_PLAYING_PROBE_JS

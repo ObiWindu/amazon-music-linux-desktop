@@ -54,6 +54,15 @@ def test_queue_panel_upcoming_scrape_wins(qapp):
     assert panel.songs() == ["Next 1", "next 2"]
 
 
+def test_queue_panel_shows_note_when_empty(qapp):
+    panel = QueuePanel()
+    assert panel.has_songs() is False
+    assert panel.note.text() == "No songs yet — press play"
+    panel.on_track("Song A")
+    assert panel.has_songs() is True
+    assert panel.note.text() == ""
+
+
 def test_queue_panel_empty_scrape_keeps_history(qapp):
     panel = QueuePanel()
     panel.on_track("Played Song")

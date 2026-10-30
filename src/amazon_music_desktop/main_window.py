@@ -205,15 +205,15 @@ class MainWindow(QMainWindow):
         outer_layout = QVBoxLayout(central2)
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
-        # top row: sidebar + left queue panel + stack
+        # top row: sidebar + stack + right queue panel
         self.queue_panel = QueuePanel()
         top_row = QWidget()
         tr = QHBoxLayout(top_row)
         tr.setContentsMargins(0, 0, 0, 0)
         tr.setSpacing(0)
         tr.addWidget(sidebar)
-        tr.addWidget(self.queue_panel)
         tr.addWidget(self.stack, 1)
+        tr.addWidget(self.queue_panel)
 
         outer_layout.addWidget(top_row, 1)
         outer_layout.addWidget(self.player_bar)
@@ -398,16 +398,16 @@ class MainWindow(QMainWindow):
         title = state.get("title") or ""
         artist = state.get("artist") or ""
         playing = state["dur"] > 0 and not state["paused"]
+        if state["dur"] > 0 and title:
+            # Track-only feed: document.title ("Playlist - Amazon Music") and
+            # other page-title junk never reach the queue panel. A song that
+            # merely *loaded* (paused or not) counts.
+            self.queue_panel.on_track(title, artist)
         if title and title != self._track_key:
             self._track_key = title
             self.now_playing.set_track(title)
-        if playing and title:
-            # Track-only feed: document.title ("Playlist - Amazon Music") and
-            # other page-title junk never reach the queue panel.
-            self.queue_panel.on_track(title, artist)
         self.player_bar.set_state(state)
         self.now_playing.set_playing(playing)
-
     def _on_url_changed(self, url):
         self.status_label.setText(url.host())
 

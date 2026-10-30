@@ -90,16 +90,16 @@ _PLAY_LABEL_WORDS = ("play", "pause", "lecture", "lire", "Écouter")
 # wins when present.
 NOW_PLAYING_PROBE_JS = (
     "(function(){"
-    "var a=document.querySelector('audio');"
+    "var a=document.querySelector('audio,video');"
     "var md=(navigator.mediaSession&&navigator.mediaSession.metadata)?navigator.mediaSession.metadata:null;"
     "return JSON.stringify({"
     "title:(md&&md.title)?md.title:document.title,"
     "artist:(md&&md.artist)?md.artist:'',"
     "cur:a?a.currentTime:0,"
     "dur:a?a.duration:0,"
-    "paused:a?a.paused:true,"
+    "paused:a?(!!a.paused):true,"
     "vol:a?a.volume:1,"
-    "muted:a?a.muted:false});"
+    "muted:a?(!!a.muted):false});"
     "})()"
 )
 
