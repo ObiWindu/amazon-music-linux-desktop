@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import subprocess
 
-from PySide6.QtCore import QSize, QUrl
-from PySide6.QtGui import QKeySequence
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -28,13 +27,15 @@ from .browser.player_bridge import (
     NOW_PLAYING_PROBE_JS,
     parse_probe_result,
     player_action_js,
-    track_progress_percent,
+    seek_js,
+    volume_js,
 )
 from .browser.profile import ProfileManager
 from .services.configuration import ConfigService
 from .services.desktop_integration import create_tray, tray_available
 from .services.logging_service import get_logger
 from .ui.now_playing import NowPlayingWidget
+from .ui.player_bar import PlayerBar
 from .ui.settings_page import SettingsPage
 
 log = get_logger("main_window")
@@ -116,6 +117,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Amazon Music Desktop")
         self.setMinimumSize(QSize(1000, 640))
+        self._last_dur = 0.0
 
         # central: sidebar + stacked content
         central = QWidget(self)
@@ -176,47 +178,18 @@ class MainWindow(QMainWindow):
         self.settings_page = SettingsPage(self.config_service.config)
         self.stack.addWidget(self.settings_page)
 
-        # bottom bar
-        bottom = QFrame()
-        bottom.setFixedHeight(96)
-        bottom.setStyleSheet("background: #181825; border-top: 1px solid #313244;")
-        bv = QVBoxLayout(bottom)
-        bv.setContentsMargins(12, 6, 12, 6)
-        bv.setSpacing(4)
-
-        # top row: player controls
-        top_row = QHBoxLayout()
-        top_row.setSpacing(8)
-        self.shuffle_btn = QPushButton("🔀")
-        self.prev_btn = QPushButton("⏮")
-        self.play_btn = QPushButton("▶")
-        self.next_btn = QPushButton("⏭")
-        self.repeat_btn = QPushButton("🔁")
-        for b in (self.shuffle_btn, self.repeat_btn):
-            b.setStyleSheet("background: transparent; border: none; color: #cdd6f4;")
-        for b in (self.shuffle_btn, self.prev_btn, self.play_btn, self.next_btn, self.repeat_btn):
-            b.setFixedWidth(40)
-        top_row.addWidget(self.shuffle_btn)
-        top_row.addWidget(self.prev_btn)
-        top_row.addWidget(self.play_btn)
-        top_row.addWidget(self.next_btn)
-        top_row.addWidget(self.repeat_btn)
-
-        self.track_label = QLabel("Amazon Music")
-        self.track_label.setStyleSheet("color: #cdd6f4; font-size: 13px;")
-        top_row.addWidget(self.track_label, 1)
-
-        self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #a6adc8; font-size: 12px;")
-        top_row.addWidget(self.status_label)
-
-        bv.addLayout(top_row)
-
-        # bottom row: full-width progress bar
-        self.progress = QProgressBar()
-        self.progress.setTextVisible(False)
-        self.progress.setMinimumHeight(8)
-        bv.addWidget(self.progress)
+        # bottom bar: native player with animated transport controls. The
+        # page's own player bar stays docked out of view; the native bar
+        # mirrors it and drives it through browser.player_bridge.
+        self.player_bar = PlayerBar(self)
+        self.player_bar.play_btn.clicked.connect(lambda: self._player_js("play"))
+        self.player_bar.prev_btn.clicked.connect(lambda: self._player_js("previous"))
+        self.player_bar.next_btn.clicked.connect(lambda: self._player_js("next"))
+        self.player_bar.shuffle_btn.clicked.connect(lambda: self._player_js("shuffle"))
+        self.player_bar.repeat_btn.clicked.connect(lambda: self._player_js("repeat"))
+        self.player_bar.volume_changed.connect(self._set_player_volume)
+        self.player_bar.muted_changed.connect(self._set_player_muted)
+        self.player_bar.seek_requested.connect(self._apply_player_seek)
 
         # place bottom bar below central content
         # restructure: use a vertical layout containing stack+bottom
@@ -251,7 +224,7 @@ class MainWindow(QMainWindow):
         tr.addWidget(self.queue_panel)
 
         outer_layout.addWidget(top_row, 1)
-        outer_layout.addWidget(bottom)
+        outer_layout.addWidget(self.player_bar)
 
         # web settings
         ws = self.page.settings()
@@ -266,7 +239,6 @@ class MainWindow(QMainWindow):
         # signals
         self.view.urlChanged.connect(self._on_url_changed)
 
-        from PySide6.QtCore import QTimer
         self._np_timer = QTimer(self)
         self._np_timer.timeout.connect(self._poll_now_playing)
         self._np_timer.start(1000)
@@ -277,11 +249,6 @@ class MainWindow(QMainWindow):
         self.profile.downloadRequested.connect(self._on_download_requested)
 
         # wire
-        self.prev_btn.clicked.connect(lambda: self._player_js("previous"))
-        self.play_btn.clicked.connect(lambda: self._player_js("play"))
-        self.next_btn.clicked.connect(lambda: self._player_js("next"))
-        self.shuffle_btn.clicked.connect(lambda: self._player_js("shuffle"))
-        self.repeat_btn.clicked.connect(lambda: self._player_js("repeat"))
         self.btn_home.clicked.connect(lambda: self._nav("home"))
         self.btn_search.clicked.connect(lambda: self._nav("search"))
         self.btn_library.clicked.connect(lambda: self._nav("library"))
@@ -357,7 +324,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.settings_page)
 
     def _player_js(self, action: str) -> None:
-        js = player_action_js(action)
+        js = player_action_js(action, self.browser_page.DOCK_PX)
         if js:
             try:
                 self.view.page().runJavaScript(
@@ -369,6 +336,28 @@ class MainWindow(QMainWindow):
     def _on_action_result(self, action: str, ok) -> None:
         if not ok:
             log.warning("player action %s: no matching control on page", action)
+
+    def _set_player_volume(self, value: int) -> None:
+        try:
+            self.view.page().runJavaScript(volume_js(volume=max(0, min(100, value)) / 100))
+        except Exception as exc:
+            log.warning("volume change failed: %s", exc)
+
+    def _set_player_muted(self, muted: bool) -> None:
+        try:
+            self.view.page().runJavaScript(volume_js(muted=muted))
+        except Exception as exc:
+            log.warning("mute toggle failed: %s", exc)
+
+    def _apply_player_seek(self, fraction: float) -> None:
+        total = float(self._last_dur)
+        if total <= 0:
+            log.debug("seek ignored: no track duration yet")
+            return
+        try:
+            self.view.page().runJavaScript(seek_js(float(max(0.0, min(1.0, fraction))) * total))
+        except Exception as exc:
+            log.warning("seek failed: %s", exc)
 
     def current_url(self) -> str:
         return self.view.url().toString()
@@ -403,15 +392,14 @@ class MainWindow(QMainWindow):
         state = parse_probe_result(result)
         if state is None:
             return
-        if state["title"]:
-            self.now_playing.set_track(state["title"])
-            self.track_label.setText(state["title"])
-            if self.queue_list.count() == 0 or self.queue_list.item(self.queue_list.count() - 1).text() != state["title"]:
-                self.queue_list.addItem(state["title"])
-        pct = track_progress_percent(state["cur"], state["dur"])
-        if pct is not None:
-            self.progress.setValue(pct)
-        self.play_btn.setText("▶" if state["paused"] else "⏸")
+        self._last_dur = float(state["dur"])
+        title = state["title"]
+        if title:
+            self.now_playing.set_track(title)
+            if self.queue_list.count() == 0 or self.queue_list.item(self.queue_list.count() - 1).text() != title:
+                self.queue_list.addItem(title)
+        self.player_bar.set_state(state)
+        self.now_playing.set_playing(not state["paused"] and state["dur"] > 0)
 
     def _on_url_changed(self, url):
         self.status_label.setText(url.host())
@@ -452,7 +440,6 @@ class MainWindow(QMainWindow):
         download.accept()
 
     def _setup_shortcuts(self):
-        from PySide6.QtGui import QShortcut
         shortcuts = {
             "Ctrl+R": self.view.reload,
             "Alt+Left": self.view.back,
@@ -464,6 +451,16 @@ class MainWindow(QMainWindow):
         for seq, slot in shortcuts.items():
             sc = QShortcut(QKeySequence(seq), self)
             sc.activated.connect(slot)
+        # media keys are safe: they cannot hijack typing in the page
+        for key, action in (
+            (Qt.Key.Key_MediaPlay, "play"),
+            (Qt.Key.Key_MediaPause, "play"),
+            (Qt.Key.Key_MediaTogglePlayPause, "play"),
+            (Qt.Key.Key_MediaNext, "next"),
+            (Qt.Key.Key_MediaPrevious, "previous"),
+        ):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(lambda _checked=False, a=action: self._player_js(a))
 
     def _setup_tray(self):
         self.tray = None

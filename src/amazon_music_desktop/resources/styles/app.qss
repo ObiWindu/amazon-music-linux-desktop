@@ -88,3 +88,70 @@ QPushButton:hover {
 QPushButton:pressed {
     background: #6a58e0;
 }
+
+/* native player bar (ui/player_bar.py) */
+QFrame#playerBar {
+    background: #181825;
+    border-top: 1px solid #313244;
+}
+QLabel#trackTitle {
+    color: #cdd6f4;
+    font-size: 13px;
+    font-weight: bold;
+}
+QLabel#seekTick {
+    color: #a6adc8;
+    font-size: 10px;
+}
+QSlider#seekSlider {
+    background: transparent;
+    min-height: 12px;
+}
+QSlider#seekSlider:horizontal {
+    background: transparent;
+}
+QSlider#seekSlider:horizontal::groove {
+    height: 5px;
+    border-radius: 2px;
+    background: #3a3a52;
+}
+QSlider#seekSlider:horizontal::sub-page {
+    background: #7c6af7;
+    border-radius: 2px;
+}
+QSlider#seekSlider:horizontal::handle {
+    width: 12px;
+    height: 12px;
+    margin: -4px 0;
+    border-radius: 6px;
+    background: #cdd6f4;
+}
+QSlider#seekSlider:horizontal::handle:hover {
+    background: #ffffff;
+}
+QSlider#seekSlider:disabled::sub-page {
+    background: #45475a;
+}
+QSlider#volSlider {
+    background: transparent;
+    min-height: 12px;
+}
+QSlider#volSlider:horizontal::groove {
+    height: 4px;
+    border-radius: 2px;
+    background: #3a3a52;
+}
+QSlider#volSlider:horizontal::sub-page {
+    background: #7c6af7;
+    border-radius: 2px;
+}
+QSlider#volSlider:horizontal::handle {
+    width: 10px;
+    height: 10px;
+    margin: -3px 0;
+    border-radius: 5px;
+    background: #cdd6f4;
+}
+QSlider#volSlider:horizontal::handle:hover {
+    background: #ffffff;
+}

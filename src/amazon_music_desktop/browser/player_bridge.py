@@ -11,6 +11,17 @@ layout-preserving collapse) coincided with playback teardowns ~1s after
 start. The page player is instead kept fully laid out and functional but
 rendered outside the visible window by ``main_window._BrowserHost``: the
 native bar is the only player surface visible or clickable in the app.
+
+Transport actions use layered strategies so the page language and DOM shape
+do not matter:
+
+1. play/pause toggles the audio/video element directly (locale-free).
+2. known data-testid / aria-label patterns (fr, en) click the transport
+   button; pager labels are excluded so "next" never pages a shelf.
+3. geometric fallback: buttons inside the docked player-bar strip of the
+   page viewport are sorted by x; the cluster layout [shuffle, prev, play,
+   next, repeat] is addressed relative to the play button (identified by
+   label keywords, else the button nearest the viewport center).
 """
 
 from __future__ import annotations
@@ -19,30 +30,39 @@ import json
 from typing import Any
 
 # Locales observed live on music.amazon.fr (2026-10-29): play buttons are
-# labeled "Écouter" (page header data-testid "pageHeaderPlay_Play_Button"),
-# carousel/shelf pagers read "Voir l'élément suivant/précédent dans ..." with
-# data-testid "*_PreviousPageButton"/"*_NextPageButton". Native controls must
-# match fr + en labels, and must never hit the carousel pagers.
+# labeled "Écouter" / "Pause", carousel/shelf pagers read
+# "Voir l'élément suivant/précédent dans ..." with data-testid
+# "*_PreviousPageButton"/"*_NextPageButton". data-testid patterns run first
+# because they are not localized.
 _ACTION_SELECTORS: dict[str, tuple[str, ...]] = {
     "previous": (
+        'button[data-testid*="prev" i]',
         'button[aria-label*="Précédent" i]',
         'button[aria-label*="Previous" i]',
-        'button[data-testid*="prev" i]',
     ),
     "next": (
+        'button[data-testid*="next" i]',
         'button[aria-label*="Suivant" i]',
         'button[aria-label*="Next" i]',
-        'button[data-testid*="next" i]',
     ),
     "shuffle": (
-        'button[aria-label*="aléatoire" i]',
-        'button[aria-label*="Shuffle" i]',
         'button[data-testid*="shuffle" i]',
+        'button[aria-label*="aléatoire" i]',
+        'button[aria-label*="mélanger" i]',
+        'button[aria-label*="Shuffle" i]',
     ),
     "repeat": (
-        'button[aria-label*="Répéter" i]',
-        'button[aria-label*="Repeat" i]',
         'button[data-testid*="repeat" i]',
+        'button[aria-label*="Répéter" i]',
+        'button[aria-label*="boucle" i]',
+        'button[aria-label*="Repeat" i]',
+    ),
+    "play": (
+        'button[data-testid*="play" i]',
+        'button[aria-label*="Écouter" i]',
+        'button[aria-label*="Lecture" i]',
+        'button[aria-label*="Play" i]',
+        'button[aria-label*="Pause" i]',
     ),
 }
 
@@ -51,67 +71,173 @@ _ACTION_SELECTORS: dict[str, tuple[str, ...]] = {
 # of skipping the track.
 _EXCLUDE_RE = "voir l'|pagebutton|autoplay"
 
-# Play/pause drives the page's media element directly (locale-independent),
-# falling back to a control button (fr + en) when no media element exists.
-_PLAY_JS = (
+_VALID_ACTIONS = tuple(_ACTION_SELECTORS)
+
+# Cluster layout inside Amazon's docked player bar, addressed as offsets
+# from the play button (identified by label keywords, else the button
+# nearest the horizontal viewport center).
+_OFFSETS: dict[str, int] = {"previous": -1, "play": 0, "next": 1, "shuffle": -2, "repeat": 2}
+
+_PLAY_LABEL_WORDS = ("play", "pause", "lecture", "lire", "Écouter")
+
+# Probe the page player state. Returns a JSON string because QtWebEngine
+# 6.11 delivers only primitive values from runJavaScript (objects and
+# arrays arrive as ''); parses back to a flat state dict.
+NOW_PLAYING_PROBE_JS = (
     "(function(){"
+    "var a=document.querySelector('audio');"
+    "return JSON.stringify({"
+    "title:document.title,"
+    "cur:a?a.currentTime:0,"
+    "dur:a?a.duration:0,"
+    "paused:a?a.paused:true,"
+    "vol:a?a.volume:1,"
+    "muted:a?a.muted:false});"
+    "})()"
+)
+
+# Click helper shared by every strategy: also fires pointer/mouse events so
+# React-style handlers attached to those events react, not only to .click().
+_CLICK_EL = (
+    "var opt={bubbles:true,cancelable:true,composed:true};"
+    "try{el.dispatchEvent(new PointerEvent('pointerdown',opt));}catch(e){}"
+    "try{el.dispatchEvent(new MouseEvent('mousedown',opt));}catch(e){}"
+    "try{el.click();}catch(e){}"
+    "try{el.dispatchEvent(new PointerEvent('pointerup',opt));}catch(e){}"
+    "try{el.dispatchEvent(new MouseEvent('mouseup',opt));}catch(e){}"
+)
+
+_MEDIA_FIRST = (
+    "if(action==='play'){"
     "var els=document.querySelectorAll('audio,video');"
     "for(var i=0;i<els.length;i++){var el=els[i];"
     "if(el.currentSrc||el.src){"
     "if(el.paused){var p=el.play();if(p&&p.catch)p.catch(function(){});return 'play';}"
-    "el.pause();return 'pause';}}"
-    "var sels=['button[aria-label*=\"Pause\" i]','button[aria-label*=\"Écouter\" i]',"
-    "'button[aria-label*=\"Lecture\" i]','button[aria-label*=\"Lire\" i]',"
-    "'button[aria-label*=\"Play\" i]','button[data-testid*=\"play\" i]'];"
-    "for(var j=0;j<sels.length;j++){var b=document.querySelector(sels[j]);"
-    "if(b){b.click();return 'clicked';}}"
+    "el.pause();return 'pause';}}}"
+)
+
+_SELECTOR_CLICKS = (
+    "for(var k=0;k<sels.length;k++){"
+    "var bs=document.querySelectorAll(sels[k]);"
+    "for(var i=0;i<bs.length;i++){var b=bs[i];"
+    "var lab=(b.getAttribute('aria-label')||'')+' '+(b.getAttribute('data-testid')||'');"
+    "var r=b.getBoundingClientRect();"
+    "if(ex.test(lab))continue;"
+    "if(r.width<8||r.height<8)continue;"
+    "var el=b;"
+    "__CLICK__"
+    "return 'sel:'+lab.replace(/\\s+/g,' ').trim().slice(0,60);}}"
+)
+
+_GEOMETRY_FALLBACK = (
+    "var cand=[];"
+    "var containers=['button','[role=button]','[role=checkbox]','[role=switch]'];"
+    "for(var k=0;k<containers.length;k++){"
+    "var els=document.querySelectorAll(containers[k]);"
+    "for(var i=0;i<els.length;i++){var el=els[i];"
+    "var r=el.getBoundingClientRect();"
+    "if(r.width<24||r.height<24)continue;"
+    "if(r.height>2*dock)continue;"
+    "if(r.top<window.innerHeight-dock-8||r.bottom>window.innerHeight+2)continue;"
+    "if(getComputedStyle(el).visibility=='hidden')continue;"
+    "var lab=(el.getAttribute('aria-label')||'')+' '+(el.getAttribute('data-testid')||'');"
+    "if(ex.test(lab))continue;"
+    "cand.push({el:el,x:r.x+r.width/2,label:lab.replace(/\\s+/g,' ').trim().slice(0,60)});}}"
+    "if(!cand.length)return '';"
+    "cand.sort(function(a,b){return a.x-b.x;});"
+    "var playIdx=-1;"
+    "for(var i=0;i<cand.length;i++){"
+    "var lw=cand[i].label.toLowerCase();"
+    "for(var w=0;w<__PLAY_WORDS__.length;w++){"
+    "if(lw.indexOf(__PLAY_WORDS__[w])!==-1){playIdx=i;break;}}"
+    "if(playIdx>=0)break;}"
+    "if(playIdx<0){var c=window.innerWidth/2;var best=1e9;"
+    "for(var i=0;i<cand.length;i++){var d=Math.abs(cand[i].x-c);"
+    "if(d<best){best=d;playIdx=i;}}}"
+    "var offsets=__OFFSETS__;"
+    "var target=playIdx+offsets[action];"
+    "if(target<0||target>=cand.length)return '';"
+    "var el=cand[target].el;"
+    "__CLICK__"
+    "return 'geom:'+cand[target].x.toFixed(0)+':'+cand[target].label;"
+)
+
+_ACTION_JS_TEMPLATE = (
+    "(function(){"
+    "var action=__ACTION__;"
+    "var ex=/__EXCLUDE__/i;"
+    "var dock=__DOCK__;"
+    "var sels=__SELECTORS__;"
+    "__MEDIA_FIRST__"
+    "__SELECTOR_CLICKS__"
+    "__GEOMETRY__"
     "return '';"
     "})()"
 )
 
-# Probe the page player state. Returns a JSON string because QtWebEngine
-# 6.11 delivers only primitive values from runJavaScript (objects and
-# arrays arrive as ''); parses back to {title, cur, dur, paused}.
-NOW_PLAYING_PROBE_JS = (
-    "(function(){"
-    "var a=document.querySelector('audio');"
-    "return JSON.stringify({title:document.title,"
-    "cur:a?a.currentTime:0,"
-    "dur:a?a.duration:0,"
-    "paused:a?a.paused:true});"
-    "})()"
-)
+
+def _play_words_js() -> str:
+    return "[" + ", ".join(json.dumps(word, ensure_ascii=False) for word in _PLAY_LABEL_WORDS) + "]"
 
 
-def player_action_js(action: str) -> str:
+def player_action_js(action: str, dock_px: int = 110) -> str:
     """Return JS that performs *action* against the page player.
 
-    Returns "" for unknown actions. The snippet returns a truthy string
-    describing what was done, or "" when no control matched, so callers can
-    log misses. Play/pause goes through the media element itself; the other
-    actions click the page's transport buttons (fr + en labels, carousel
-    pagers excluded).
+    Returns "" for unknown actions. The snippet returns a non-empty string
+    describing which strategy/element was used, or "" when nothing matched
+    (callers log misses). Strategies: media element toggle (play), known
+    selector patterns (fr/en), then the docked-strip geometry fallback.
     """
-    if action == "play":
-        return _PLAY_JS
-    selectors = _ACTION_SELECTORS.get(action)
-    if selectors is None:
+    if action not in _VALID_ACTIONS:
         return ""
-    import json
+    selectors = json.dumps(_ACTION_SELECTORS.get(action, ()), ensure_ascii=False)
+    clicks = _SELECTOR_CLICKS.replace("__CLICK__", _CLICK_EL) if _ACTION_SELECTORS.get(action) else ""
+    geometry = (
+        _GEOMETRY_FALLBACK.replace("__CLICK__", _CLICK_EL)
+        .replace("__OFFSETS__", json.dumps(_OFFSETS))
+        .replace("__PLAY_WORDS__", _play_words_js())
+    )
+    return (
+        _ACTION_JS_TEMPLATE.replace("__ACTION__", json.dumps(action))
+        .replace("__EXCLUDE__", _EXCLUDE_RE)
+        .replace("__DOCK__", str(max(0, int(dock_px))))
+        .replace("__SELECTORS__", selectors)
+        .replace("__MEDIA_FIRST__", _MEDIA_FIRST)
+        .replace("__SELECTOR_CLICKS__", clicks)
+        .replace("__GEOMETRY__", geometry)
+    )
 
+
+def seek_js(seconds: float) -> str:
+    """Return JS that seeks the page media element to *seconds*."""
+    value = max(0.0, float(seconds))
     return (
         "(function(){"
-        f"var sels={json.dumps(selectors, ensure_ascii=False)};"
-        f"var ex=/{_EXCLUDE_RE}/i;"
-        "for(var j=0;j<sels.length;j++){"
-        "var bs=document.querySelectorAll(sels[j]);"
-        "for(var i=0;i<bs.length;i++){var b=bs[i];"
-        "var t=(b.getAttribute('aria-label')||'')+' '+(b.getAttribute('data-testid')||'');"
-        "var r=b.getBoundingClientRect();"
-        "if(ex.test(t))continue;"
-        "if(r.width<8||r.height<8)continue;"
-        "b.click();return 'clicked';}}"
-        "}"
+        "var a=document.querySelector('audio');"
+        "if(!a){a=document.querySelector('video');}"
+        "if(!a||!isFinite(a.duration)||a.duration<=0)return '';"
+        f"a.currentTime=Math.max(0,Math.min(a.duration,{value}));"
+        "return 'seek';"
+        "})()"
+    )
+
+
+def volume_js(volume: float | None = None, muted: bool | None = None) -> str:
+    """Return JS that sets the page media volume and/or mute flag."""
+    parts = ""
+    if volume is not None:
+        parts += f"a.volume={max(0.0, min(1.0, float(volume)))};"
+    if muted is not None:
+        parts += f"a.muted={'true' if muted else 'false'};"
+    if not parts:
+        return ""
+    return (
+        "(function(){"
+        "var els=document.querySelectorAll('audio,video');"
+        "for(var i=0;i<els.length;i++){var a=els[i];"
+        "if(!(a.currentSrc||a.src))continue;"
+        "try{" + parts + "}catch(e){}"
+        "return 'vol:'+a.volume+':'+(a.muted?'1':'0');}"
         "return '';"
         "})()"
     )
@@ -131,21 +257,24 @@ def parse_probe_result(result: Any) -> dict[str, Any] | None:
             return None
     if not isinstance(result, dict):
         return None
+
+    def _float(value: Any, default: float = 0.0) -> float:
+        if value is None:
+            return default
+        try:
+            return max(float(value), 0.0)
+        except (TypeError, ValueError):
+            return default
+
     title = result.get("title")
-    try:
-        cur = float(result.get("cur", 0) or 0)
-    except (TypeError, ValueError):
-        cur = 0.0
-    try:
-        dur = float(result.get("dur", 0) or 0)
-    except (TypeError, ValueError):
-        dur = 0.0
-    paused = result.get("paused", True)
+    volume = min(_float(result.get("vol"), 1.0), 1.0)
     return {
         "title": title if isinstance(title, str) and title else "",
-        "cur": max(cur, 0.0),
-        "dur": max(dur, 0.0),
-        "paused": bool(paused),
+        "cur": _float(result.get("cur")),
+        "dur": _float(result.get("dur")),
+        "paused": bool(result.get("paused", True)),
+        "volume": volume,
+        "muted": bool(result.get("muted", False)),
     }
 
 

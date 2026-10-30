@@ -471,6 +471,13 @@ The design should feel like a desktop music player, not a generic testing utilit
 
 Avoid adding fake playback controls that do not operate the actual player.
 
+The native player bar must visibly animate on interaction (press feedback,
+hover fill, playing indicator) and must actually drive the page player:
+play/pause toggles the page media element, next/previous/shuffle/repeat click
+the page transport controls (locale-independent selectors with a geometric
+fallback over the docked player strip), and seek/volume mirror the page
+state. Buttons that would silently no-op are not acceptable.
+
 ## 6.2 Navigation toolbar
 
 Provide:
