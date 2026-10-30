@@ -145,6 +145,75 @@ def test_ensure_widevine_user_dir_updates_old_system_link(tmp_path, monkeypatch)
     assert any(p.get("arch") == "arm64" for p in manifest["platforms"])
 
 
+def test_ensure_widevine_user_dir_updates_system_widevinecdm_link(tmp_path, monkeypatch):
+    import json
+
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    home = tmp_path / "home"
+    system_dir = tmp_path / "system" / "WidevineCdm"
+    old = system_dir / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"old")
+    (system_dir / "manifest.json").write_text(json.dumps({"version": "4.10.2662.3"}))
+
+    version_dir = home / ".config" / "Codex" / "WidevineCdm" / "4.10.3112.0"
+    new = version_dir / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
+    new.parent.mkdir(parents=True)
+    new.write_bytes(b"new")
+    (version_dir / "manifest.json").write_text(json.dumps({"version": "4.10.3112.0"}))
+
+    target = home / ".config" / "chromium" / "WidevineCdm"
+    link = target / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(old)
+    (target / "manifest.json").write_text(json.dumps({"version": "4.10.2662.3"}))
+
+    monkeypatch.setattr(d, "CDM_PATH", tmp_path / "system" / "libwidevinecdm.so")
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", system_dir)
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    monkeypatch.setattr(d.platform, "machine", lambda: "aarch64")
+
+    d.ensure_widevine_user_dir()
+
+    assert link.resolve() == new.resolve()
+    manifest = json.loads((target / "manifest.json").read_text())
+    assert manifest["version"] == "4.10.3112.0"
+
+
+def test_ensure_widevine_user_dir_keeps_custom_link(tmp_path, monkeypatch):
+    import json
+
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    home = tmp_path / "home"
+    version_dir = home / ".config" / "Codex" / "WidevineCdm" / "4.10.3112.0"
+    new = version_dir / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
+    new.parent.mkdir(parents=True)
+    new.write_bytes(b"new")
+    (version_dir / "manifest.json").write_text(json.dumps({"version": "4.10.3112.0"}))
+
+    custom = tmp_path / "custom" / "libwidevinecdm.so"
+    custom.parent.mkdir(parents=True)
+    custom.write_bytes(b"custom")
+
+    target = home / ".config" / "chromium" / "WidevineCdm"
+    link = target / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(custom)
+
+    monkeypatch.setattr(d, "CDM_PATH", tmp_path / "system" / "nope.so")
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "system" / "WidevineCdm")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    monkeypatch.setattr(d.platform, "machine", lambda: "aarch64")
+
+    d.ensure_widevine_user_dir()
+
+    assert link.resolve() == custom.resolve()
+
+
 def test_parse_cdm_session_result_ok():
     from amazon_music_desktop.browser.drm_diagnostics import parse_cdm_session_result
     r = parse_cdm_session_result({"ok": True, "keySystem": "com.widevine.alpha"})

@@ -409,12 +409,29 @@ def _write_user_manifest(target: Path, cdm: Path) -> None:
     (target / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
 
+def _is_managed_cdm(path: Path) -> bool:
+    """Return True for a CDM under a system or bundled managed root."""
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    for root in (CDM_PATH, WIDEVINE_CDM_DIR, *BUNDLED_CDM_DIRS):
+        try:
+            root_resolved = root.resolve()
+        except OSError:
+            root_resolved = root
+        if resolved.is_relative_to(root_resolved):
+            return True
+    return False
+
+
 def ensure_widevine_user_dir() -> None:
     """Point user-level WidevineCdm dirs at the newest usable CDM.
 
     QtWebEngine and Chromium discover Widevine through these directories.
-    Existing symlinks that still point at the old distro CDM are updated so
-    both discovery paths use the same (newer) build.
+    Symlinks that point at a system or bundled CDM are updated so both
+    discovery paths use the same (newer) build. A custom user CDM is left
+    untouched.
     """
     cdm = find_usable_cdm()
     if cdm is None:
@@ -423,10 +440,6 @@ def ensure_widevine_user_dir() -> None:
         selected = cdm.resolve()
     except OSError:
         selected = cdm
-    try:
-        old_system = CDM_PATH.resolve()
-    except OSError:
-        old_system = CDM_PATH
     home = Path.home()
     for base in (home / ".config" / "chromium", home / ".config" / "google-chrome"):
         target = base / "WidevineCdm"
@@ -442,10 +455,10 @@ def ensure_widevine_user_dir() -> None:
                         current = link.resolve()
                     except OSError:
                         current = None
-                    # Replace only a broken link or one pointing at the old
-                    # distro CDM; never clobber a custom CDM.
+                    # Replace a broken link or one pointing at a managed
+                    # system/bundled CDM; never clobber a custom CDM.
                     if current != selected and (
-                        current is None or current == old_system or not link.exists()
+                        current is None or _is_managed_cdm(current) or not link.exists()
                     ):
                         link.unlink()
                         link.symlink_to(cdm)
