@@ -11,13 +11,22 @@
   CDM under `/usr/lib64/amazon-music-desktop/WidevineCdm/` (or
   `/usr/lib/amazon-music-desktop/WidevineCdm/` on non-Fedora layouts). Such a
   build is for local use only and must not be redistributed.
-- Discovery: the app scans the system install, the optional bundled directory,
-  `~/.config/chromium`, `~/.config/google-chrome`, and versioned `WidevineCdm`
-  directories from Chromium-based applications. It selects the newest readable
-  CDM whose ELF architecture matches the host. Malformed (non-ELF, empty,
-  unreadable) and architecture-incompatible binaries are rejected — including
-  an explicit `--widevine-cdm-path` pointing at one, which falls back to
-  discovery with a warning instead of handing Chromium an unloadable file.
+- Discovery: the app scans the system install, the engine's hardcoded
+  default path (read-only — on builds that ignore the flag, that file is
+  the only one that can load, so selection must at least see it), the
+  optional bundled directory, `~/.config/chromium`, `~/.config/google-chrome`,
+  and versioned `WidevineCdm` directories from Chromium-based applications.
+  A candidate is eligible only with a valid manifest (present, parseable,
+  carrying a version, and — when it lists platforms — including the host
+  arch) plus a host-arch ELF body, with one exception: a bare library
+  sitting exactly at an engine default path is electable with unknown
+  version when its ELF body is otherwise valid, since on affected builds
+  it is the only file that can load (fully specified builds still sort
+  above it). Malformed, manifest-less (elsewhere), and
+  architecture-incompatible binaries are rejected — including an explicit
+  `--widevine-cdm-path` pointing at one, which falls back to discovery with
+  a warning instead of handing Chromium an unloadable file. It selects the
+  newest eligible CDM.
 - Initialization: the selected library is passed to QtWebEngine as
   `--widevine-cdm-path=<cdm>` via `QTWEBENGINE_CHROMIUM_FLAGS` before engine
   init (wired in `app.main()` ahead of `QApplication`, locked by
@@ -43,10 +52,14 @@
   a read-only scan of our own process tree's `/proc/*/maps` for mmapped
   `libwidevinecdm.so` binaries after first EME use. A mismatch between
   selected and observed paths means the engine loaded a different build.
-- Diagnostics: **Diagnostics → CDM in use / CDM version** reports the selected
-  path and version. **Test CDM session** creates MediaKeys and a
-  MediaKeySession to prove the CDM loads (and only that — it is not evidence
-  of playback). Filesystem status is classified as NOT_INSTALLED,
+- Diagnostics: three values are reported side by side and never conflated —
+  **(1)** the CDM selected by Aurora (`CDM selected by Aurora`, a proposal),
+  **(2)** the CDM at the engine's default location (`Engine default CDM
+  path`), and **(3)** the CDM actually mapped into our helper processes
+  (`Observed mapped CDM`), followed by a `Selection vs loaded verdict`
+  (MATCH / MISMATCH / UNKNOWN). Only (3) is ground truth for what loaded.
+  **Test CDM session** creates MediaKeys and a MediaKeySession to prove the
+  CDM loads (and only that — it is not evidence of playback). Filesystem status is classified as NOT_INSTALLED,
   NOT_DISCOVERABLE, MANIFEST_INVALID, ARCH_INCOMPATIBLE, LIBRARY_MISSING, or
   READY (filesystem checks passed); INITIALIZED/INIT_FAILED come only from
   the live session probe, never from the filesystem.

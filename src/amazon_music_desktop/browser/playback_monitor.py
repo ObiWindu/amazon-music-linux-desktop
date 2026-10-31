@@ -276,8 +276,10 @@ class PlaybackMonitor:
             details = payload.get("details", details)
 
         now = time.time() if timestamp is None else float(timestamp)
+        previous_position = self._position
         if position is not None or duration is not None:
             self.update_position(position, duration, timestamp=now)
+        position_advanced = self._position > previous_position
 
         if media_session is not None:
             self.set_media_session(media_session)
@@ -320,6 +322,8 @@ class PlaybackMonitor:
             ):
                 self._state = PlaybackState.BUFFERING
         elif name == "playing":
+            # The browser fires 'playing' when rendering actually starts:
+            # this confirms playback has started.
             self._state = PlaybackState.PLAYING
         elif name in ("waiting", "stalled"):
             if name == "stalled":
@@ -336,9 +340,23 @@ class PlaybackMonitor:
         elif name == "encrypted":
             if self._state == PlaybackState.IDLE:
                 self._state = PlaybackState.LOADING
-        elif name in ("timeupdate", "progress"):
-            if self._state in (PlaybackState.BUFFERING, PlaybackState.LOADING):
+        elif name == "timeupdate":
+            # Progression evidence, but only when the position actually
+            # advances: a timeupdate at a frozen position (the 0:00 case)
+            # proves nothing. Advancing while BUFFERING/LOADING/STALLED
+            # confirms real output, including recovery from a stall.
+            if position_advanced and self._state in (
+                PlaybackState.BUFFERING,
+                PlaybackState.LOADING,
+                PlaybackState.STALLED,
+            ):
                 self._state = PlaybackState.PLAYING
+            self._last_progress_time = now
+            self._last_progress_position = self._position
+        elif name == "progress":
+            # Media data downloading/buffering: refreshes the stall watchdog
+            # but never counts as playback. PLAYING is only ever reached via
+            # 'playing' or an advancing timeupdate.
             self._last_progress_time = now
             self._last_progress_position = self._position
         # unknown events do not change state and are not errors

@@ -83,8 +83,12 @@ def test_encrypted_from_idle_loads():
 
 
 def test_timeupdate_promotes_buffering_to_playing():
+    # Only an *advancing* timeupdate promotes: frozen position is the 0:00
+    # failure mode and must stay BUFFERING.
     monitor = transitions(["play", "waiting"])
-    monitor.handle_event("timeupdate")
+    monitor.handle_event("timeupdate", timestamp=101.0, position=0.0, duration=200.0)
+    assert monitor.state == PlaybackState.BUFFERING
+    monitor.handle_event("timeupdate", timestamp=102.0, position=2.5, duration=200.0)
     assert monitor.state == PlaybackState.PLAYING
 
 
@@ -269,4 +273,44 @@ def test_playing_with_advancing_position_does_not_stall():
     monitor.handle_event("playing", timestamp=100.0, position=5.0, duration=200.0)
     monitor.handle_event("timeupdate", timestamp=103.0, position=8.0, duration=200.0)
     assert monitor.detect_stalled(now=106.0) is False
+    assert monitor.state == PlaybackState.PLAYING
+
+
+def test_progress_never_promotes_to_playing():
+    # 'progress' means media bytes are downloading/buffering — the exact
+    # 0:00 failure mode — never evidence that playback started.
+    monitor = PlaybackMonitor()
+    monitor.handle_event("play", timestamp=100.0)
+    assert monitor.state == PlaybackState.BUFFERING
+    monitor.handle_event("progress", timestamp=101.0, position=5.0, duration=200.0)
+    assert monitor.state == PlaybackState.BUFFERING
+    monitor.handle_event("progress", timestamp=102.0, position=40.0, duration=200.0)
+    assert monitor.state == PlaybackState.BUFFERING
+
+
+def test_timeupdate_frozen_position_does_not_promote():
+    # A timeupdate at a frozen position (page stuck at 0:00) proves nothing.
+    monitor = PlaybackMonitor()
+    monitor.handle_event("play", timestamp=100.0)
+    monitor.handle_event("timeupdate", timestamp=101.0, position=0.0, duration=200.0)
+    assert monitor.state == PlaybackState.BUFFERING
+    monitor.handle_event("timeupdate", timestamp=102.0, position=0.0, duration=200.0)
+    assert monitor.state == PlaybackState.BUFFERING
+
+
+def test_timeupdate_advancing_recovers_stalled():
+    monitor = PlaybackMonitor(stall_timeout=5.0)
+    monitor.handle_event("playing", timestamp=100.0, position=5.0, duration=200.0)
+    assert monitor.detect_stalled(now=106.0) is True
+    assert monitor.state == PlaybackState.STALLED
+    # real output resumed: position advances again
+    monitor.handle_event("timeupdate", timestamp=107.0, position=9.0, duration=200.0)
+    assert monitor.state == PlaybackState.PLAYING
+
+
+def test_playing_event_still_confirms_start():
+    # 'playing' fires when the browser starts rendering: immediate evidence.
+    monitor = PlaybackMonitor()
+    monitor.handle_event("play", timestamp=100.0)
+    monitor.handle_event("playing", timestamp=100.5)
     assert monitor.state == PlaybackState.PLAYING

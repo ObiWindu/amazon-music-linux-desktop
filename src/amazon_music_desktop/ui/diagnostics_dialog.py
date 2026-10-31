@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtGui import QDesktopServices, QUrl
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -196,7 +197,7 @@ class DiagnosticsDialog(QDialog):
         lines.append("")
         selected_cdm = find_usable_cdm()
         lines.append(f"CDM system path: {CDM_PATH}")
-        lines.append(f"CDM in use: {selected_cdm or 'none'}")
+        lines.append(f"CDM selected by Aurora (proposal only): {selected_cdm or 'none'}")
         lines.append(f"CDM version: {cdm_version(selected_cdm)}")
         lines.append(f"CDM install status: {cdm_install_status(selected_cdm)}")
         manifest_result = validate_cdm_manifest(selected_cdm or CDM_PATH)
@@ -209,8 +210,9 @@ class DiagnosticsDialog(QDialog):
             )
         )
         lines.append(
-            "CDM selection: newest readable build across system and "
-            "user-level Chromium directories"
+            "CDM selection: newest manifest-valid, host-arch build across "
+            "system, engine-default, and user-level Chromium directories "
+            "(a proposal — see verdict below)"
         )
         freeworld = detect_freeworld()
         lines.append(f"libavcodec-freeworld (Fedora freeworld codec library): {freeworld}")
@@ -221,6 +223,8 @@ class DiagnosticsDialog(QDialog):
         comparison = cdm_version_comparison()
         for cand in comparison["candidates"]:
             marker = " (selected)" if cand["selected"] else ""
+            if not cand["selected"] and not cand.get("eligible", True):
+                marker += " (ineligible: manifest or arch fails selection)"
             version = cand["version"] or "unknown version"
             match = cand["arch_match"]
             match_s = (
@@ -263,6 +267,29 @@ class DiagnosticsDialog(QDialog):
             lines.append(
                 "Observed mapped CDM (live process): none visible — "
                 "run 'Test CDM session' first, then re-run diagnostics"
+            )
+        lines.append("")
+        lines.append("=== Selection vs loaded verdict ===")
+        lines.append(
+            "The selected CDM is a proposal; only the mapped path above is "
+            "ground truth for what the engine loaded."
+        )
+        if not observed:
+            lines.append(
+                "verdict: UNKNOWN — no CDM mapped into our processes yet "
+                "(run 'Test CDM session' first, then re-run diagnostics)"
+            )
+        elif selected_cdm is not None and any(
+            path == str(selected_cdm) for path in observed
+        ):
+            lines.append(
+                f"verdict: MATCH — the engine mapped the selected CDM ({selected_cdm})"
+            )
+        else:
+            lines.append(
+                f"verdict: MISMATCH — Aurora selected {selected_cdm or 'none'} "
+                f"but the engine mapped {', '.join(observed)}; "
+                "playback uses the mapped build"
             )
         # playback state + pipeline (remediation spec 5)
         monitor = getattr(self.parent(), "monitor", None)

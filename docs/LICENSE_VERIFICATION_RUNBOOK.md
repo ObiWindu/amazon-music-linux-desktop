@@ -27,8 +27,12 @@ playback. Only this runbook's license-stage evidence counts.
    build (`qt6-qtwebengine-6.11.2-2.fc44` ignores `--widevine-cdm-path` and
    tries only its hardcoded distro stub — see Diagnostics → Engine default
    CDM path) no license test is possible yet. A system administrator may
-   place the installed vendor CDM at the attempted path and re-run the
-   probe; the app never does this itself. Do not proceed to account-based
+   place the installed vendor CDM library at the attempted path (add its
+   manifest.json alongside when available so version comparison and the
+   verdict work; a bare valid library is still electable with unknown
+   version. Back the placeholder up first; package updates may revert it)
+   and re-run the probe; the app never does this itself. Do not proceed to
+   account-based
    testing until the probe passes — a license failure with no loaded CDM
    is meaningless.
 1. Launch the app and sign in through Amazon's own login flow.

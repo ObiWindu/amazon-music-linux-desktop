@@ -23,7 +23,7 @@
 | AC-19 | Sustained playback | Unverified | requires account |
 | AC-20 | Media keys/tray | Partial | tray implemented |
 | AC-21 | Renderer failures handled | Implemented | main_window (reported to playback diagnostics) |
-| AC-22 | Unit tests pass | Verified | 214 passed (unit+security+integration offscreen; test_go_home excluded, needs live network) |
+| AC-22 | Unit tests pass | Verified | 231 passed (unit+security+integration offscreen; test_go_home excluded, needs live network) |
 | AC-23 | Security tests pass | Verified | 4 passed |
 | AC-24 | Lint/static pass | Verified | ruff clean; mypy src --ignore-missing-imports clean |
 | AC-25 | RPM builds AArch64 | Verified | rpm built |

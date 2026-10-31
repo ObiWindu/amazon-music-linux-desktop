@@ -190,8 +190,14 @@ def _widevine_roots() -> list[Path]:
 
 
 def _candidate_paths() -> list[Path]:
-    """Enumerate plausible CDM library locations, including versioned ones."""
-    paths: list[Path] = [CDM_PATH]
+    """Enumerate plausible CDM library locations, including versioned ones.
+
+    The engine's hardcoded default paths are included as read-only
+    discovery sources: when a build ignores --widevine-cdm-path, the file
+    at the engine path is the only one that can load, so selection must
+    at least see it. The app never writes to those locations.
+    """
+    paths: list[Path] = [CDM_PATH, *ENGINE_DEFAULT_CDM_PATHS]
     for root in _widevine_roots():
         for platform_dir in _platform_dirs():
             paths.append(root / "_platform_specific" / platform_dir / "libwidevinecdm.so")
@@ -254,14 +260,24 @@ def _explicit_cdm() -> Path | None:
         if arch in ("not-elf",) or arch.startswith(("error:", "unknown(")):
             log.warning("ignoring explicit CDM %s: not a loadable library (%s)", candidate, arch)
             continue
+        if not validate_cdm_manifest(candidate).ok:
+            log.warning("ignoring explicit CDM %s: manifest missing or invalid", candidate)
+            continue
         return candidate
     return None
 
 
 def find_usable_cdm() -> Path | None:
-    """Return the newest readable, architecture-compatible CDM library.
+    """Return the newest eligible, architecture-compatible CDM library.
 
-    An explicit ``--widevine-cdm-path`` in QTWEBENGINE_CHROMIUM_FLAGS wins.
+    Eligible means manifest-valid (present, parseable, versioned, host-arch
+    when platforms are listed), except that a bare but otherwise valid
+    library exactly at an engine default path is electable with unknown
+    version — it sorts below versioned builds, so fully specified CDMs
+    still win. An explicit ``--widevine-cdm-path`` in
+    QTWEBENGINE_CHROMIUM_FLAGS wins when fully valid, and is rejected with
+    a warning otherwise.
+
     Otherwise, Chromium-based applications keep a component-updated CDM under
     ``~/.config/<app>/WidevineCdm`` (sometimes versioned). Those builds can
     be much newer than the distro package; prefer the newest one because
@@ -292,6 +308,12 @@ def find_usable_cdm() -> Path | None:
             if arch != host_arch:
                 continue
         elif arch in ("not-elf",) or arch.startswith(("error:", "unknown(")):
+            continue
+        # Eligibility: a valid manifest plus a host-arch ELF, except that a
+        # bare but otherwise valid library exactly at an engine default
+        # path is electable with unknown version (it may be the only file
+        # the engine can load — see _selection_eligible).
+        if not _selection_eligible(candidate):
             continue
         if host_arch and arch in ("aarch64", "x86_64") and arch != host_arch:
             continue
@@ -685,13 +707,15 @@ def cdm_inventory() -> list[dict[str, Any]]:
             continue
         manifest = _manifest_for(path)
         version = manifest.get("version")
+        arch_here = _elf_arch(path)
         entries.append(
             {
                 "path": str(path),
                 "version": version if isinstance(version, str) else None,
-                "arch": _elf_arch(path),
+                "arch": arch_here,
                 "manifest_valid": bool(manifest),
-                "arch_match": (_elf_arch(path) == host) if host else None,
+                "eligible": _selection_eligible(path),
+                "arch_match": (arch_here == host) if host else None,
                 "size": size,
                 "selected": path == selected,
             }
@@ -850,6 +874,51 @@ def engine_cdm_status() -> list[dict[str, Any]]:
             entry["state"] = "candidate: engine will attempt this file"
         entries.append(entry)
     return entries
+
+
+def _is_engine_default_path(candidate: Path) -> bool:
+    """True when *candidate* is one of the engine's hardcoded CDM paths."""
+    for known in ENGINE_DEFAULT_CDM_PATHS:
+        try:
+            if candidate == known or candidate.resolve() == known.resolve():
+                return True
+        except OSError:
+            if candidate == known:
+                return True
+    return False
+
+
+def _selection_eligible(candidate: Path) -> bool:
+    """Whether *candidate* may be selected for engine handoff.
+
+    Hard gates always apply: the file must exist, be readable and non-empty,
+    and its ELF architecture must match the host. On top of that, a valid
+    manifest is required (present, parseable, versioned, host-arch when
+    platforms are listed) — except that a bare library sitting exactly at
+    an engine default path is electable with unknown version when its ELF
+    body is otherwise valid: on builds that ignore --widevine-cdm-path that
+    file is the only thing that can load. Fully specified builds sort above
+    it, so placing manifest.json alongside is still recommended.
+    """
+    try:
+        if not candidate.is_file() or not os.access(candidate, os.R_OK):
+            return False
+        if candidate.stat().st_size <= 0:
+            return False
+    except OSError:
+        return False
+    host_arch = _host_elf_arch()
+    arch = _elf_arch(candidate)
+    if host_arch:
+        if arch != host_arch:
+            return False
+    elif arch in ("not-elf",) or arch.startswith(("error:", "unknown(")):
+        return False
+    if validate_cdm_manifest(candidate).ok:
+        return True
+    # Bare-library exception, engine default paths only (manifest part
+    # waived, never the size/arch gates above).
+    return _is_engine_default_path(candidate)
 
 
 def cdm_version_comparison() -> dict[str, Any]:

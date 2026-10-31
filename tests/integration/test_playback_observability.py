@@ -217,3 +217,19 @@ def test_instrumentation_runs_in_iframe_context(window, qtbot):
     # instrumentation ran without throwing on the framed document
     assert isinstance(payload.get("events"), list)
     assert payload.get("position") == 0
+
+
+def test_diagnostics_verdict_unknown_without_mapped_cdm(window):
+    from amazon_music_desktop.ui.diagnostics_dialog import DiagnosticsDialog
+
+    dialog = DiagnosticsDialog(window, playback_diagnostics=window.playback_diagnostics)
+    text = dialog.text.toPlainText()
+    # the three values are labeled as what they are — selection is never
+    # presented as proof of loading
+    assert "CDM selected by Aurora" in text
+    assert "Engine default CDM path" in text
+    assert "Observed mapped CDM" in text
+    assert "Selection vs loaded verdict" in text
+    # no CDM is mapped into test processes: verdict must be UNKNOWN, never MATCH
+    assert "verdict: UNKNOWN" in text
+    assert "verdict: MATCH" not in text

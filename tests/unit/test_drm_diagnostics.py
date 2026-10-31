@@ -55,12 +55,14 @@ def test_build_widevine_flags(tmp_path):
 
 
 def test_configure_widevine_sets_env(tmp_path, monkeypatch):
+    import json
     import os
 
     import amazon_music_desktop.browser.drm_diagnostics as d
     cdm = tmp_path / "libwidevinecdm.so"
     host = d._host_elf_arch() or "aarch64"
     cdm.write_bytes(_elf_bytes(183 if host == "aarch64" else 62) + b"\x00" * 64)
+    (tmp_path / "manifest.json").write_text(json.dumps({"version": "4.10.1.0"}))
     monkeypatch.setattr(d, "CDM_PATH", cdm)
     monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "WidevineCdm")
     monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
@@ -98,11 +100,14 @@ def test_find_usable_cdm_prefers_newest_user_component(tmp_path, monkeypatch):
 
 
 def test_find_usable_cdm_honors_explicit_flag(tmp_path, monkeypatch):
+    import json
+
     import amazon_music_desktop.browser.drm_diagnostics as d
 
     cdm = tmp_path / "libwidevinecdm.so"
     host = d._host_elf_arch() or "aarch64"
     cdm.write_bytes(_elf_bytes(183 if host == "aarch64" else 62) + b"\x00" * 64)
+    (tmp_path / "manifest.json").write_text(json.dumps({"version": "4.10.1.0"}))
     monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", f"--widevine-cdm-path={cdm}")
     monkeypatch.setattr(d, "CDM_PATH", tmp_path / "nope.so")
     monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "WidevineCdm")
@@ -669,3 +674,197 @@ def test_engine_cdm_status_missing_and_healthy(tmp_path, monkeypatch):
     (status,) = d.engine_cdm_status()
     assert status["size"] > 0
     assert status["state"].startswith("candidate")
+
+
+def _isolated_with_engine_path(tmp_path, monkeypatch, engine_files: dict[str, bytes]):
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    paths = []
+    for name, blob in engine_files.items():
+        target = tmp_path / "engine" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(blob)
+        paths.append(target)
+    monkeypatch.setattr(d, "ENGINE_DEFAULT_CDM_PATHS", tuple(paths))
+    monkeypatch.setattr(d, "CDM_PATH", tmp_path / "none.so")
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "widevine")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    monkeypatch.setattr(d.platform, "machine", lambda: "aarch64")
+    return d, paths
+
+
+def test_selection_elects_bare_engine_path_library(tmp_path, monkeypatch):
+    d, (engine,) = _isolated_with_engine_path(
+        tmp_path, monkeypatch, {"libwidevinecdm.so": _elf_bytes(183) + b"\x00" * 16}
+    )
+    # no manifest anywhere: still electable, version unknown
+    assert d.find_usable_cdm() == engine
+    assert d.cdm_version(engine) == "unknown"
+
+
+def test_manifest_valid_build_beats_bare_engine_path(tmp_path, monkeypatch):
+    import json as json_mod
+
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    _isolated_with_engine_path(
+        tmp_path, monkeypatch, {"libwidevinecdm.so": _elf_bytes(183) + b"\x00" * 16}
+    )
+    system = tmp_path / "system" / "libwidevinecdm.so"
+    system.parent.mkdir(parents=True)
+    system.write_bytes(_elf_bytes(183) + b"\x00" * 16)
+    (tmp_path / "system" / "manifest.json").write_text(
+        json_mod.dumps({"version": "4.10.2662.3"})
+    )
+    monkeypatch.setattr(d, "CDM_PATH", system)
+    # fully specified builds sort above the version-unknown engine file
+    assert d.find_usable_cdm() == system
+
+
+def test_bare_engine_path_wrong_arch_still_rejected(tmp_path, monkeypatch):
+    d, _ = _isolated_with_engine_path(
+        tmp_path, monkeypatch, {"libwidevinecdm.so": _elf_bytes(62) + b"\x00" * 16}
+    )
+    assert d.find_usable_cdm() is None
+
+
+def test_explicit_bare_engine_path_selected_via_discovery(tmp_path, monkeypatch):
+    d, (engine,) = _isolated_with_engine_path(
+        tmp_path, monkeypatch, {"libwidevinecdm.so": _elf_bytes(183) + b"\x00" * 16}
+    )
+    # explicit flags stay strict (warning + fallback), but discovery still
+    # converges on the only loadable file
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", f"--widevine-cdm-path={engine}")
+    assert d.find_usable_cdm() == engine
+
+
+def test_inventory_marks_bare_engine_path_eligible(tmp_path, monkeypatch):
+    d, (engine,) = _isolated_with_engine_path(
+        tmp_path, monkeypatch, {"libwidevinecdm.so": _elf_bytes(183) + b"\x00" * 16}
+    )
+    by_path = {entry["path"]: entry for entry in d.cdm_inventory()}
+    assert by_path[str(engine)]["eligible"] is True
+    assert by_path[str(engine)]["manifest_valid"] is False
+
+
+def test_selection_rejects_empty_file_with_valid_manifest(tmp_path, monkeypatch):
+    # The 0-byte distro stub scenario: a valid manifest nearby must not make
+    # an empty file electable.
+    import json as json_mod
+
+    d = _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64")
+    cdm = tmp_path / "widevine" / "libwidevinecdm.so"
+    cdm.parent.mkdir(parents=True)
+    cdm.write_bytes(b"")
+    (tmp_path / "widevine" / "manifest.json").write_text(
+        json_mod.dumps({"version": "4.10.2662.3"})
+    )
+    assert d._selection_eligible(cdm) is False
+    monkeypatch.setattr(d, "CDM_PATH", cdm)
+    assert d.find_usable_cdm() is None
+
+
+def _write_manifest_case(tmp_path, manifest_text: str | None):
+    cdm = tmp_path / "widevine" / "libwidevinecdm.so"
+    cdm.parent.mkdir(parents=True, exist_ok=True)
+    cdm.write_bytes(_elf_bytes(183) + b"\x00" * 16)
+    manifest = tmp_path / "widevine" / "manifest.json"
+    if manifest_text is None:
+        if manifest.exists():
+            manifest.unlink()
+    else:
+        manifest.write_text(manifest_text)
+    return cdm
+
+
+def test_selection_accepts_compatible_manifest(tmp_path, monkeypatch):
+    import json as json_mod
+
+    d = _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64")
+    cdm = _write_manifest_case(
+        tmp_path,
+        json_mod.dumps(
+            {
+                "version": "4.10.3112.0",
+                "platforms": [
+                    {
+                        "os": "linux",
+                        "arch": "arm64",
+                        "sub_package_path": "_platform_specific/linux_arm64/",
+                    }
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(d, "CDM_PATH", cdm)
+    assert d.find_usable_cdm() == cdm
+    assert d.cdm_version(cdm) == "4.10.3112.0"
+
+
+def test_selection_rejects_missing_manifest(tmp_path, monkeypatch):
+    d = _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64")
+    cdm = _write_manifest_case(tmp_path, None)
+    monkeypatch.setattr(d, "CDM_PATH", cdm)
+    assert d.find_usable_cdm() is None
+
+
+def test_selection_rejects_malformed_manifest(tmp_path, monkeypatch):
+    d = _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64")
+    cdm = _write_manifest_case(tmp_path, "{not valid json")
+    monkeypatch.setattr(d, "CDM_PATH", cdm)
+    assert d.find_usable_cdm() is None
+
+
+def test_selection_rejects_manifest_without_version(tmp_path, monkeypatch):
+    import json as json_mod
+
+    d = _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64")
+    cdm = _write_manifest_case(tmp_path, json_mod.dumps({"name": "WidevineCdm"}))
+    monkeypatch.setattr(d, "CDM_PATH", cdm)
+    assert d.find_usable_cdm() is None
+
+
+def test_selection_rejects_arch_incompatible_manifest(tmp_path, monkeypatch):
+    import json as json_mod
+
+    d = _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64")
+    cdm = _write_manifest_case(
+        tmp_path,
+        json_mod.dumps(
+            {
+                "version": "4.10.1.0",
+                "platforms": [
+                    {
+                        "os": "linux",
+                        "arch": "x64",
+                        "sub_package_path": "_platform_specific/linux_x64/",
+                    }
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(d, "CDM_PATH", cdm)
+    assert d.find_usable_cdm() is None
+
+
+def test_explicit_cdm_invalid_manifest_falls_back_to_discovery(tmp_path, monkeypatch):
+    import json as json_mod
+
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    home = tmp_path / "home"
+    system = _make_cdm(tmp_path / "system" / "libwidevinecdm.so", "4.10.2662.3", machine=183)
+    (tmp_path / "system" / "manifest.json").write_text(
+        json_mod.dumps({"version": "4.10.2662.3"})
+    )
+    bad = tmp_path / "pinned" / "libwidevinecdm.so"
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(_elf_bytes(183) + b"\x00" * 16)  # valid ELF, no manifest
+    monkeypatch.setattr(d, "CDM_PATH", system)
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "widevine")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    monkeypatch.setattr(d.platform, "machine", lambda: "aarch64")
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", f"--widevine-cdm-path={bad}")
+    assert d.find_usable_cdm() == system
