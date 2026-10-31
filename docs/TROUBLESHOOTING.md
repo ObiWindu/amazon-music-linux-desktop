@@ -1,5 +1,16 @@
 # Troubleshooting
 
+- `CreateCdmFunc not available` from **Test CDM session** (or the headless
+  probe): the engine never loaded any CDM. On Fedora's qt6-qtwebengine
+  6.11.2 the `--widevine-cdm-path` switch is ignored — the engine always
+  attempts its hardcoded distro path (check Diagnostics → Engine default CDM
+  path; currently a 0-byte placeholder). Selecting a newer CDM cannot help
+  until a real library is loadable there. No app setting fixes this; a
+  system administrator may place the installed vendor CDM at the attempted
+  path (back it up first; package updates may revert it) and re-run
+  `QT_QPA_PLATFORM=offscreen python3 scripts/probe-cdm-session.py` to
+  confirm `[C_cdm_session] OK`. The app itself never writes outside the
+  user-level directories.
 - Missing WebEngine bindings: install qt6-qtwebengine and python3-pyside6.
 - Missing CDM: install widevine-installer; check /var/lib/widevine.
 - Playback starts, then stops after ~1s: root cause confirmed with an instrumented live run using the 2022 ARM64 CDM (4.10.2662.3). Sequence: EME session created, `generateRequest` OK, license POST to `music.amazon.fr/ZAZ/api/dmls/` → HTTP 400 `ForbiddenException`, `denialReason: VMP_VALIDATION_FAILED` ("UNVERIFIED request not eligible for LD content"), then the page empties the media element and retries once. Amazon validates the Widevine Verified Media Path; the 2022 build fails that check. The app now discovers and prefers newer component-updated CDMs (for example 4.10.3112.0 under `~/.config/<app>/WidevineCdm/<version>/`); check **Diagnostics → CDM version**. If it still reports 4.10.2662.3, install or update a Chromium-based application that ships a newer ARM64 CDM, or point `QTWEBENGINE_CHROMIUM_FLAGS` at one. Codecs (AAC/MP3 verified) and the player UI are not involved.

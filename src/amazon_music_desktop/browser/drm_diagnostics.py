@@ -322,6 +322,13 @@ def configure_widevine() -> Path | None:
 
     Must run before QApplication is constructed (Chromium reads
     QTWEBENGINE_CHROMIUM_FLAGS at engine init). Returns the CDM in use.
+
+    Caveat (verified 2026-10-31): Fedora's qt6-qtwebengine-6.11.2 ignores
+    --widevine-cdm-path — the string is absent from its binaries, a bogus
+    flagged path is never attempted in verbose logs, and the engine always
+    tries its hardcoded distro stub instead. The flag is still set because
+    other Qt/Chromium builds honor it; on affected builds use
+    engine_cdm_status() and the headless probe to see what actually loads.
     """
     cdm = find_usable_cdm()
     current = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
@@ -511,6 +518,10 @@ def ensure_widevine_user_dir() -> None:
     """Point user-level WidevineCdm dirs at the newest usable CDM.
 
     QtWebEngine and Chromium discover Widevine through these directories.
+    (Caveat: Fedora's qt6-qtwebengine-6.11.2 ignores both these directories
+    and --widevine-cdm-path — verified 2026-10-31 — so on that build they
+    serve Chromium/Electron component discovery only. They are still
+    maintained because other builds honor them.)
     Only the native platform directory (``linux_arm64`` on ARM64,
     ``linux_x64`` on x86_64) is maintained — writing the host binary under
     the opposite architecture's path would be a fake mapping and is never
@@ -790,6 +801,55 @@ def observed_loaded_cdm(
         if path not in seen:
             seen.append(path)
     return seen
+
+
+# Engine-default CDM locations observed at runtime, per build/distro.
+# Verified 2026-10-31: Fedora's qt6-qtwebengine-6.11.2 ignores the
+# --widevine-cdm-path switch entirely (the string is absent from its
+# binaries and a bogus flagged path is never attempted in verbose logs)
+# and instead always tries this distro stub path. Labeled as observed
+# behavior of a specific build, not a portable assumption.
+ENGINE_DEFAULT_CDM_PATHS: tuple[Path, ...] = (
+    Path("/usr/lib64/chromium-browser/WidevineCdm/_platform_specific/linux_x64/libwidevinecdm.so"),
+)
+
+
+def engine_cdm_status() -> list[dict[str, Any]]:
+    """Report the CDM binaries at the engine's hardcoded default paths.
+
+    This is the ground truth for *which file* the engine will attempt when
+    the build ignores --widevine-cdm-path: a 0-byte or missing file here
+    means EME fails at createMediaKeys no matter which CDM the app selected.
+    Entries are observational only; the app never writes to these paths.
+    """
+    entries: list[dict[str, Any]] = []
+    for path in ENGINE_DEFAULT_CDM_PATHS:
+        entry: dict[str, Any] = {"path": str(path)}
+        try:
+            exists = path.is_file()
+        except OSError:
+            exists = False
+        entry["present"] = exists
+        if not exists:
+            entry["state"] = "missing"
+            entries.append(entry)
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            entry["state"] = "unreadable"
+            entries.append(entry)
+            continue
+        entry["size"] = size
+        entry["arch"] = _elf_arch(path)
+        if size <= 0:
+            entry["state"] = "placeholder: 0-byte file, CDM cannot load"
+        elif entry["arch"] == "not-elf":
+            entry["state"] = "unloadable: not an ELF library"
+        else:
+            entry["state"] = "candidate: engine will attempt this file"
+        entries.append(entry)
+    return entries
 
 
 def cdm_version_comparison() -> dict[str, Any]:

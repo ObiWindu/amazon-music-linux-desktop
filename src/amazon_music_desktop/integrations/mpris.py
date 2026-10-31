@@ -57,14 +57,17 @@ def metadata_for(track: dict[str, Any], trackid: int) -> dict[str, Any]:
 
     Only fields with evidence are included: title/artist/album/artwork come
     from the page's Media Session, or from the page probe as a fallback.
+    Artwork is forwarded only as http(s) URLs — Media Session often exposes
+    blob: or data: URLs that are meaningless to other MPRIS clients and must
+    not leak into the shared metadata mapping.
     """
     metadata: dict[str, Any] = {"mpris:trackid": f"{MPRIS_OBJECT_PATH}/track{trackid}"}
     length = track.get("length") or 0
     if length > 0:
         metadata["mpris:length"] = int(length * USEC)
     art_url = track.get("art_url")
-    if art_url:
-        metadata["mpris:artUrl"] = str(art_url)
+    if isinstance(art_url, str) and art_url.startswith(("http://", "https://")):
+        metadata["mpris:artUrl"] = art_url
     title = track.get("title")
     if title:
         metadata["xesam:title"] = str(title)

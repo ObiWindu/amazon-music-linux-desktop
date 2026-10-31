@@ -517,6 +517,28 @@ def test_explicit_cdm_empty_file_is_rejected(tmp_path, monkeypatch):
     assert d.find_usable_cdm() is None
 
 
+def test_explicit_cdm_override_wins_over_newer_discovery(tmp_path, monkeypatch):
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    home = tmp_path / "home"
+    host_machine = 183 if (d._host_elf_arch() or "aarch64") == "aarch64" else 62
+    new = _make_cdm(
+        home / ".config" / "chromium" / "WidevineCdm" / "4.10.3112.0"
+        / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so",
+        "4.10.3112.0",
+        machine=host_machine,
+    )
+    pinned = _make_cdm(tmp_path / "pinned" / "libwidevinecdm.so", "4.10.1.0", machine=host_machine)
+    monkeypatch.setattr(d, "CDM_PATH", tmp_path / "none.so")
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "widevine")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", f"--widevine-cdm-path={pinned}")
+    # operator override is deliberate: the pinned (older but valid) build wins
+    assert d.find_usable_cdm() == pinned
+    assert new.is_file()
+
+
 def test_discovery_rejects_malformed_binaries(tmp_path, monkeypatch):
     d = _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64")
     bad = tmp_path / "widevine" / "libwidevinecdm.so"
@@ -620,3 +642,30 @@ def test_loaded_cdm_paths_rejects_unknown_scope(tmp_path):
 
     with pytest.raises(ValueError):
         loaded_cdm_paths(tmp_path, scope="everything")
+
+
+def test_engine_cdm_status_flags_zero_byte_placeholder(tmp_path, monkeypatch):
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    stub = tmp_path / "WidevineCdm" / "libwidevinecdm.so"
+    stub.parent.mkdir(parents=True)
+    stub.write_bytes(b"")
+    monkeypatch.setattr(d, "ENGINE_DEFAULT_CDM_PATHS", (stub,))
+    (status,) = d.engine_cdm_status()
+    assert status["present"] is True
+    assert status["size"] == 0
+    assert "0-byte" in status["state"]
+
+
+def test_engine_cdm_status_missing_and_healthy(tmp_path, monkeypatch):
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    monkeypatch.setattr(d, "ENGINE_DEFAULT_CDM_PATHS", (tmp_path / "absent.so",))
+    (status,) = d.engine_cdm_status()
+    assert status == {"path": str(tmp_path / "absent.so"), "present": False, "state": "missing"}
+
+    healthy = _make_cdm(tmp_path / "real.so", "4.10.3112.0")
+    monkeypatch.setattr(d, "ENGINE_DEFAULT_CDM_PATHS", (healthy,))
+    (status,) = d.engine_cdm_status()
+    assert status["size"] > 0
+    assert status["state"].startswith("candidate")

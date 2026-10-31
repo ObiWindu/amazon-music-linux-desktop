@@ -236,6 +236,14 @@ def test_instrumentation_js_is_read_only():
         assert forbidden not in PLAYBACK_MONITOR_JS
 
 
+def test_instrumentation_scans_same_origin_iframes_safely():
+    # Amazon may host media inside iframes; cross-origin access must never
+    # throw (guarded), and no privileged bridge may appear.
+    assert "contentDocument" in PLAYBACK_MONITOR_JS
+    assert "iframe" in PLAYBACK_MONITOR_JS
+    assert PLAYBACK_MONITOR_JS.count("try{") >= 2 or PLAYBACK_MONITOR_JS.count("try {") >= 2
+
+
 def test_buffering_promotes_on_advancing_timeupdate():
     # Actual playback progression: a 'play' request alone stays BUFFERING
     # until position evidence (timeupdate) confirms output.

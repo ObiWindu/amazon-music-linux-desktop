@@ -327,6 +327,39 @@ class PlaybackDiagnostics:
             details={"reason": "not observable via public browser APIs"},
         )
 
+    def note_media_session(self, playback_state: str | None, has_metadata: bool) -> DiagnosticEvent:
+        """Record the page's Media Session snapshot as corroboration.
+
+        Only the session playbackState (``none``/``paused``/``playing``) and
+        whether metadata is present are stored — never titles, artists, or
+        artwork, which are personal listening information and do not belong
+        in diagnostic reports. The normalized monitor state stays
+        authoritative; this event is a second opinion for triage.
+        """
+        state = str(playback_state or "none").strip().lower() or "none"
+        if state not in ("none", "paused", "playing"):
+            state = "unknown"
+        return self._record(
+            "media_session",
+            f"media session snapshot: playbackState={state}",
+            {"playback_state": state, "has_metadata": bool(has_metadata)},
+        )
+
+    def note_navigation(self, url: str | None = None) -> DiagnosticEvent:
+        """Reset per-page evidence when the main frame navigates.
+
+        Media events, positions, and pipeline stages belong to the previous
+        document; keeping them would attribute stale evidence to the new
+        page. The page-loaded stage is re-verified by note_page_loaded on
+        loadFinished.
+        """
+        self.pipeline.reset()
+        return self._record(
+            "navigation",
+            "main frame navigation started; per-page evidence reset",
+            {"url": sanitize_url(url) if url else None},
+        )
+
     def note_encrypted_media(self, timestamp: float | None = None) -> None:
         self.pipeline.verify("encrypted_media_detected", timestamp=timestamp)
 

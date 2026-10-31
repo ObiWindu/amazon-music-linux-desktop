@@ -62,7 +62,9 @@ system build).
 - READY: filesystem validation passed for the selected CDM (manifest valid,
   host-matching ELF arch). The live CDM session probe is the only evidence
   for initialization.
-- INITIALIZED: CDM 4.10.3112.0 (MediaKeySession creation verified live).
+- INITIALIZED: **not currently established** — see 2026-10-31 addendum below.
+  (A 4.10.3112.0 session success was recorded 2026-10-29; it does not
+  reproduce today.)
 - LICENSE ACCEPTED: never observed on any build so far.
 - PLAYBACK VERIFIED: never observed.
 
@@ -71,3 +73,30 @@ blocker is Amazon's device-eligibility/attestation policy for this
 environment. That limitation will be documented here and in the README
 rather than worked around: no DRM bypass, identity spoofing, or license
 manipulation is in scope for this project.
+
+## Addendum 2026-10-31 — CDM never loads: engine ignores --widevine-cdm-path
+
+Headless EME probes (`scripts/probe-cdm-session.py`, offscreen QtWebEngine,
+`--widevine-cdm-path` pointing at 4.10.3112.0 and at system 4.10.2662.3,
+with and without `--no-sandbox`) all fail identically:
+
+- `requestMediaKeySystemAccess('com.widevine.alpha')` succeeds (key system
+  advertised), then `createMediaKeys()` fails:
+  `NotSupportedError: CreateCdmFunc not available.`
+- Chromium stderr (verbose) shows the loader attempting exactly one path:
+  `/usr/lib64/chromium-browser/WidevineCdm/_platform_specific/linux_x64/libwidevinecdm.so`
+  ("file too short") — a **0-byte placeholder**. The flagged path is never
+  mentioned, even for a deliberately bogus one, although `ps` confirms the
+  flag reaches the QtWebEngineProcess cmdline.
+- The string `widevine-cdm-path` is absent from the engine binaries
+  (`libQt6WebEngineCore.so.6.11.2`): this build
+  (`qt6-qtwebengine-6.11.2-2.fc44.aarch64`) has no support for the switch.
+
+Current failure order is therefore EARLIER than the Oct-29 VMP record:
+CDM load fails → no license request is ever sent → VMP cannot currently be
+re-tested. The Oct-29 license-stage evidence stands as a record of that day
+(a loadable CDM existed at the engine's path then); it is not reproducible
+today. Repro: `QT_QPA_PLATFORM=offscreen python3
+scripts/probe-cdm-session.py`; exit 1 with `CDM SESSION FAILED` above.
+Environment: Fedora Asahi Remix 44 aarch64, SELinux Enforcing, no Amazon
+account needed for this stage.

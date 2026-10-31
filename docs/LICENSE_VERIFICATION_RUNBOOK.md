@@ -20,17 +20,31 @@ playback. Only this runbook's license-stage evidence counts.
 
 ## Procedure
 
+0. **Check the engine can load a CDM at all (no account needed).**
+   Run `QT_QPA_PLATFORM=offscreen python3 scripts/probe-cdm-session.py`.
+   It must print `CDM SESSION OK`. If it prints `CDM SESSION FAILED:
+   NotSupportedError: CreateCdmFunc not available`, stop: on this engine
+   build (`qt6-qtwebengine-6.11.2-2.fc44` ignores `--widevine-cdm-path` and
+   tries only its hardcoded distro stub — see Diagnostics → Engine default
+   CDM path) no license test is possible yet. A system administrator may
+   place the installed vendor CDM at the attempted path and re-run the
+   probe; the app never does this itself. Do not proceed to account-based
+   testing until the probe passes — a license failure with no loaded CDM
+   is meaningless.
 1. Launch the app and sign in through Amazon's own login flow.
 2. Open **Diagnostics → Run diagnostics**. Confirm:
    - `CDM in use` points at the `4.10.3112.0` build,
    - `CDM install status: READY`,
    - `CDM manifest validity: valid`,
+   - `Engine default CDM path` holds a real (non-zero-byte) library — the
+     engine loads from there, not from `CDM in use`, on affected builds,
    - `Observed mapped CDM (live process): none visible` (expected before
      first EME use).
 3. Click **Test CDM session**. Expected: `[C_cdm_session] OK` with
    `keySystem: com.widevine.alpha`. This proves the CDM instantiates.
-4. Re-run diagnostics. Expected now: `Observed mapped CDM` lists the
-   `4.10.3112.0` path with `(matches selected CDM)`. Record whether it does.
+4. Re-run diagnostics. Expected now: `Observed mapped CDM` lists the engine
+   path with `(matches selected CDM)` when the engine honors the flag, or
+   the engine-default path otherwise. Record both values verbatim.
 5. Select any subscribed track and press play. Watch for up to 60 seconds.
 6. Open **Diagnostics** again and copy the report
    (**Copy report**, or Settings → Playback diagnostics → Copy).

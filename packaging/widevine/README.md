@@ -12,6 +12,10 @@ and ~/.config/google-chrome/WidevineCdm on first run, pointing at the newest
 CDM it can find. Component-updated builds under
 `~/.config/<app>/WidevineCdm/<version>/` (for example from Chrome, Chromium,
 or an Electron application) are preferred over the older distro package.
+Note: on engine builds that ignore `--widevine-cdm-path` (Fedora's
+qt6-qtwebengine 6.11.2, verified 2026-10-31), selection is recorded but
+ineffective — the engine loads only its hardcoded distro path. See
+`docs/DRM_COMPATIBILITY.md` and Diagnostics → Engine default CDM path.
 
 ## Optional local bundling
 

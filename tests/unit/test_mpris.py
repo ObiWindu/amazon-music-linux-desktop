@@ -115,6 +115,32 @@ def test_metadata_artwork_from_media_session(service):
     assert service.metadata["mpris:artUrl"] == "https://example/img.jpg"
 
 
+def test_metadata_artwork_blob_and_data_urls_dropped():
+    for junk in ("blob:https://music.amazon.fr/uuid-1", "data:image/jpeg;base64,AAA"):
+        metadata = metadata_for({"title": "Song", "art_url": junk}, 0)
+        assert "mpris:artUrl" not in metadata
+    assert metadata_for({"title": "Song"}, 1)["mpris:trackid"].endswith("/track1")
+
+
+def test_emit_seeked_noop_without_registration(service):
+    service.emit_seeked(10.0)  # must not raise without a bus registration
+
+
+def test_emit_seeked_and_update_playback_send_when_registered(window):
+    from amazon_music_desktop.integrations.mpris import MprisService
+
+    sent: list = []
+    service = MprisService(None)
+    service._window = window
+    service._connection = connected_connection(sent)
+    assert service.register() is True
+    window.monitor.handle_event("playing", position=4.0, duration=200.0)
+    service.update_playback()
+    service.emit_seeked(4.0)
+    assert sent  # PropertiesChanged + Seeked reached the bus
+    service.unregister()
+
+
 def test_metadata_without_session_uses_probe_fallback(service):
     service._window.monitor.handle_event("playing", position=1.0, duration=100.0)
     metadata = service.metadata

@@ -2,7 +2,12 @@
 
 - Stage A (library presence): PASS (aarch64, deps resolved; system CDM 4.10.2662.3)
 - Stage B (EME/Widevine key system): PASS (com.widevine.alpha)
-- Stage C (CDM init): PASS (MediaKeys + MediaKeySession create OK; newer component CDM 4.10.3112.0 is selected over the 2022 system build)
+- Stage C (CDM init): **FAIL as of 2026-10-31** — headless probes with the
+  flag pointed at 4.10.3112.0 and at system 4.10.2662.3 (with and without
+  `--no-sandbox`) all end in `NotSupportedError: CreateCdmFunc not
+  available`. The engine ignores `--widevine-cdm-path` on this build and
+  attempts only the 0-byte distro stub (see timeline addendum). The
+  2026-10-29 in-app session success with 4.10.3112.0 does not reproduce.
 - Stage D (Amazon playback): PENDING (requires an Amazon account/subscription and audio output)
 
 ## License-stage status (the remaining blocker)

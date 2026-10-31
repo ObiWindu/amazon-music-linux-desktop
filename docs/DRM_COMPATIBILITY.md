@@ -24,6 +24,19 @@
   `tests/unit/test_startup_wiring.py`). The app also creates or updates the
   user-level `WidevineCdm` directories so both discovery paths point at the
   same build.
+  **Build caveat (verified 2026-10-31, `qt6-qtwebengine-6.11.2-2.fc44`): the
+  engine ignores the switch** — it is absent from the engine binaries, a
+  bogus flagged path is never attempted in verbose logs although the flag
+  reaches the helper cmdline, and the loader always tries the hardcoded
+  distro stub
+  `/usr/lib64/chromium-browser/WidevineCdm/_platform_specific/linux_x64/libwidevinecdm.so`.
+  That file is currently a 0-byte placeholder, so EME fails at
+  `createMediaKeys()` (`CreateCdmFunc not available`) no matter which CDM
+  the app selects. Repro without an Amazon account:
+  `QT_QPA_PLATFORM=offscreen python3 scripts/probe-cdm-session.py`.
+  Diagnostics shows this path under `Engine default CDM path`; the app never
+  writes there. Until the engine loads a real CDM, the failure sits one
+  stage *before* the license server and VMP cannot be re-tested.
 - Loaded-CDM verification: Qt exposes no API for the CDM it actually loaded,
   so Diagnostics reports three independent facts side by side — the flag
   passed to the engine, the selected path/version, and `Observed mapped CDM`,
@@ -58,7 +71,7 @@ claims.
 
 | Environment | Qt WebEngine | Widevine CDM | Playback |
 |---|---|---|---|
-| Fedora Asahi Remix 44 aarch64 | 6.11.2 (Chromium 140) | 4.10.3112.0 arm64 (component) preferred; 4.10.2662.3 arm64 rejected by license server (VMP_VALIDATION_FAILED) | CDM loads (MediaKeySession OK); protected playback unverified (needs account) |
+| Fedora Asahi Remix 44 aarch64 | 6.11.2 (Chromium 140) | 4.10.3112.0 arm64 (component) preferred; 4.10.2662.3 arm64 rejected by license server (VMP_VALIDATION_FAILED) | engine ignores --widevine-cdm-path, tries 0-byte distro stub → createMediaKeys fails (2026-10-31); license stage unreachable; protected playback unverified |
 | Fedora x86_64 | not tested | not tested | not tested |
 | Fedora aarch64 (non-Asahi) | not tested | not tested | not tested |
 | Debian x86_64 | not tested | not tested | not tested |

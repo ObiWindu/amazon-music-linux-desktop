@@ -165,3 +165,55 @@ def test_apply_player_seek_ignored_without_duration():
     self = SimpleNamespace(_last_dur=0.0, view=view, mpris=mpris)
     MainWindow._apply_player_seek(self, 0.5)
     assert calls == {}
+
+
+def test_load_started_resets_stale_page_evidence(window):
+    window.monitor.handle_event("playing", position=4.0, duration=200.0)
+    window.playback_diagnostics.note_track_selected()
+    assert window.monitor.state is PlaybackState.PLAYING
+    window._on_load_started()
+    assert window.monitor.state is PlaybackState.IDLE
+    assert window.monitor.events == []
+    summary = window.playback_diagnostics.pipeline.summary()
+    assert summary["track_selection_initiated"] == "UNKNOWN"
+    assert any(e.kind == "navigation" for e in window.playback_diagnostics.events)
+
+
+def test_media_session_snapshot_recorded_once_per_change(window):
+    payload = (
+        '{"events": [], "mediaSession": '
+        '{"title": "Song", "artist": "Me", "playbackState": "playing"}}'
+    )
+    window._on_monitor_state(payload)
+    window._on_monitor_state(payload)  # same snapshot: no duplicate event
+    snapshots = [
+        e for e in window.playback_diagnostics.events if e.kind == "media_session"
+    ]
+    assert len(snapshots) == 1
+    assert snapshots[0].details == {"playback_state": "playing", "has_metadata": True}
+
+
+def test_instrumentation_runs_in_iframe_context(window, qtbot):
+    import json
+
+    from amazon_music_desktop.browser.playback_monitor import PLAYBACK_MONITOR_JS
+
+    html = (
+        "<html><body>"
+        "<audio id='top' src='song.mp3'></audio>"
+        "<iframe srcdoc=\"<audio id='inner' src='ad.mp3'></audio>\"></iframe>"
+        "</body></html>"
+    )
+    window.view.setHtml(html, window.view.url())
+    assert window.view.page() is not None
+    seen: dict = {}
+
+    def collect(result):
+        seen["result"] = result
+
+    window.view.page().runJavaScript(PLAYBACK_MONITOR_JS, collect)
+    qtbot.waitUntil(lambda: "result" in seen, timeout=10000)
+    payload = json.loads(seen["result"])
+    # instrumentation ran without throwing on the framed document
+    assert isinstance(payload.get("events"), list)
+    assert payload.get("position") == 0

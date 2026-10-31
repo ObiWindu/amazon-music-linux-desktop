@@ -23,6 +23,7 @@ from ..browser.drm_diagnostics import (
     cdm_version,
     cdm_version_comparison,
     detect_freeworld,
+    engine_cdm_status,
     find_usable_cdm,
     format_stage,
     observed_loaded_cdm,
@@ -167,11 +168,13 @@ class DiagnosticsDialog(QDialog):
             + "\n\n=== Widevine Stage C (live) ===\n"
             + message
             + "\n\nnote: a successful CDM session does not imply protected playback;"
-            f"\nCDM in use: {version}. Amazon rejected the older ARM64 build"
-            "\n4.10.2662.3 with VMP_VALIDATION_FAILED; newer builds may pass."
-            "\nIf this shows 4.10.2662.3, install or update a Chromium-based"
-            "\napplication that ships a newer ARM64 CDM. If playback still"
-            "\nfails, check the license response in the log."
+            f"\nCDM selected by the app: {version}. If the probe fails with"
+            "\n'CreateCdmFunc not available', the engine never loaded any CDM:"
+            "\nthis build may ignore --widevine-cdm-path — check Diagnostics →"
+            "\n'Engine default CDM path' for the 0-byte distro stub. The older"
+            "\nARM64 build 4.10.2662.3 was additionally rejected by Amazon with"
+            "\nVMP_VALIDATION_FAILED when it did load (2026-10-29)."
+            "\nIf playback still fails, check the license response in the log."
         )
 
     def _cdm_note(self, message: str) -> None:
@@ -232,6 +235,21 @@ class DiagnosticsDialog(QDialog):
         if not comparison["candidates"]:
             lines.append("- no CDM binaries discovered")
         lines.append(f"Qt WebEngine CDM load: {comparison['qt_webengine_loaded']}")
+        lines.append("")
+        lines.append("=== Engine default CDM path ===")
+        lines.append(
+            "Some engine builds ignore --widevine-cdm-path and always try "
+            "their hardcoded distro path (observed on Fedora qt6-qtwebengine "
+            "6.11.2, 2026-10-31). The app never writes here."
+        )
+        for entry in engine_cdm_status():
+            if entry.get("state") == "missing":
+                lines.append(f"- {entry['path']}: missing")
+            else:
+                lines.append(
+                    f"- {entry['path']}: size={entry.get('size', '?')}, "
+                    f"arch={entry.get('arch', '?')}, {entry.get('state', '')}"
+                )
         observed = observed_loaded_cdm(scope="tree")
         if observed:
             for path in observed:
@@ -254,6 +272,17 @@ class DiagnosticsDialog(QDialog):
             lines.append(f"state: {monitor.state.value}")
             lines.append(f"position: {monitor.position:.1f}s / {monitor.duration:.1f}s")
             lines.append(f"last media event: {monitor.last_event or 'none'}")
+            # Media Session corroboration: playbackState + metadata presence
+            # only — titles/artists never enter the report (listening info).
+            session = monitor.media_session or {}
+            session_state = session.get("playbackState") or "none"
+            has_metadata = bool(
+                session.get("title") or session.get("artist") or session.get("album")
+            )
+            lines.append(
+                f"media session: playbackState={session_state}, "
+                f"metadata={'present' if has_metadata else 'absent'}"
+            )
         from ..browser.playback_diagnostics import PlaybackDiagnostics
 
         diagnostics = self._playback_diagnostics or PlaybackDiagnostics()

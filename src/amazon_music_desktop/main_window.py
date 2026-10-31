@@ -135,6 +135,7 @@ class MainWindow(QMainWindow):
         self._track_title = ""
         self._track_artist = ""
         self._encrypted_noted_at = 0.0
+        self._last_media_session_state = ""
 
         # playback observability (remediation spec 3): the monitor normalizes
         # browser media events, the diagnostics collector classifies failures.
@@ -465,6 +466,16 @@ class MainWindow(QMainWindow):
             if event.name == "encrypted" and event.timestamp > self._encrypted_noted_at:
                 self._encrypted_noted_at = event.timestamp
                 self.playback_diagnostics.note_encrypted_media(event.timestamp)
+        # Media Session corroboration, recorded only on change so the
+        # 1 Hz poll does not spam the diagnostics event log.
+        session = self.monitor.media_session or {}
+        ms_state = str(session.get("playbackState") or "none")
+        if ms_state != self._last_media_session_state:
+            self._last_media_session_state = ms_state
+            self.playback_diagnostics.note_media_session(
+                ms_state,
+                bool(session.get("title") or session.get("artist") or session.get("album")),
+            )
 
     def _on_queue_result(self, result):
         songs = parse_queue_result(result)
@@ -502,6 +513,14 @@ class MainWindow(QMainWindow):
 
     def _on_load_started(self):
         self.status_label.setText("Loading\u2026")
+        # A new document invalidates media events, positions, and pipeline
+        # stages gathered from the previous one; reset both so stale
+        # evidence is never attributed to the new page.
+        self.monitor.reset()
+        try:
+            self.playback_diagnostics.note_navigation(self.current_url())
+        except Exception as exc:
+            log.debug("navigation note failed: %s", exc)
 
     def _on_load_progress(self, progress):
         self.status_label.setText(f"Loading\u2026 {progress}%")

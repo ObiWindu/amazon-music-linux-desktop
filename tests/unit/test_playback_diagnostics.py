@@ -234,6 +234,40 @@ def test_player_action_empty_outcome_is_a_miss():
     assert [e.kind for e in diagnostics.events] == ["player_action_missed"]
 
 
+def test_note_media_session_records_state_not_titles():
+    diagnostics = PlaybackDiagnostics()
+    event = diagnostics.note_media_session(
+        "playing", has_metadata=True,
+    )
+    assert event.kind == "media_session"
+    assert event.details == {"playback_state": "playing", "has_metadata": True}
+    report = diagnostics.to_report()
+    assert "playbackState=playing" in report
+    # personal listening information never enters the report
+    assert diagnostics.failure_code is None
+
+
+def test_note_media_session_normalizes_unknown_state():
+    diagnostics = PlaybackDiagnostics()
+    event = diagnostics.note_media_session("grooving", has_metadata=False)
+    assert event.details["playback_state"] == "unknown"
+    assert diagnostics.note_media_session(None, has_metadata=False).details[
+        "playback_state"
+    ] == "none"
+
+
+def test_note_navigation_resets_pipeline_and_redacts_url():
+    diagnostics = PlaybackDiagnostics()
+    diagnostics.note_track_selected()
+    assert diagnostics.pipeline.summary()["track_selection_initiated"] == "VERIFIED"
+    event = diagnostics.note_navigation("https://music.amazon.fr/home?session=secret")
+    assert event.kind == "navigation"
+    assert event.details == {"url": "https://music.amazon.fr/home"}
+    assert "secret" not in (event.details["url"] or "")
+    # per-page evidence belongs to the old document
+    assert diagnostics.pipeline.summary()["track_selection_initiated"] == "UNKNOWN"
+
+
 def test_record_media_error_classifies_decode_failure():
     diagnostics = PlaybackDiagnostics()
     diagnostics.record_media_error("media decoder failure")
