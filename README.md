@@ -20,6 +20,20 @@ A native desktop application for Amazon Music on Linux, built with Python 3, PyS
 - Automated tests (unit, security, integration), lint (ruff), type checks (mypy).
 - Packaging for RPM, Debian, and Arch; GitHub Actions CI.
 
+## Playback & DRM status (honest)
+
+| Level | Status |
+|---|---|
+| CDM detected | Yes — system (4.10.2662.3) and component-updated (4.10.3112.0) ARM64 builds; architecture-validated |
+| CDM initialized | Yes — MediaKeys + MediaKeySession creation verified live with 4.10.3112.0 |
+| License accepted | No — 4.10.2662.3 is rejected by Amazon (`VMP_VALIDATION_FAILED`, HTTP 400); 4.10.3112.0 not yet verified against the license server |
+| Playback verified | No — protected playback has not been successfully tested on any configuration yet |
+
+Details and the full failure timeline: `evidence/PLAYBACK_FAILURE_TIMELINE.md`.
+If Amazon rejects the newer build too, that is a device-eligibility
+limitation of this environment and will be documented here rather than
+worked around.
+
 ## Requirements
 
 - Linux (AArch64 recommended; x86_64 may work with a compatible Widevine CDM).

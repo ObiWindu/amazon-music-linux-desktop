@@ -23,7 +23,7 @@
 | AC-19 | Sustained playback | Unverified | requires account |
 | AC-20 | Media keys/tray | Partial | tray implemented |
 | AC-21 | Renderer failures handled | Implemented | main_window (reported to playback diagnostics) |
-| AC-22 | Unit tests pass | Verified | 158 passed (unit+security+integration offscreen) |
+| AC-22 | Unit tests pass | Verified | 175 passed (unit+security+integration offscreen) |
 | AC-23 | Security tests pass | Verified | 4 passed |
 | AC-24 | Lint/static pass | Verified | ruff clean; mypy src --ignore-missing-imports clean |
 | AC-25 | RPM builds AArch64 | Verified | rpm built |
@@ -42,3 +42,5 @@
 | AC-38 | MPRIS controls synchronize with playback | Implemented | integrations/mpris.py, unit tests; on-desktop verification pending |
 | AC-39 | Playback pipeline stages tracked honestly | Implemented | VERIFIED/FAILED/UNKNOWN/NOT_APPLICABLE model, unit tests |
 | AC-40 | Compatibility matrix documented | Verified | docs/DRM_COMPATIBILITY.md |
+| AC-41 | VMP/license rejection observable from live runs | Implemented | console-error classification marks license stage FAILED; evidence/PLAYBACK_FAILURE_TIMELINE.md |
+| AC-42 | CDM version comparison (system vs selected vs flag) | Implemented | cdm_version_comparison + dialog inventory; loaded CDM marked not directly observable |
