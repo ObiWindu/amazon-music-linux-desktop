@@ -21,7 +21,10 @@
   directories so both discovery paths point at the same build.
 - Diagnostics: **Diagnostics → CDM in use / CDM version** reports the selected
   path and version. **Test CDM session** creates MediaKeys and a
-  MediaKeySession to prove the CDM loads.
+  MediaKeySession to prove the CDM loads (and only that — it is not evidence
+  of playback). CDM install status is classified as NOT_INSTALLED,
+  NOT_DISCOVERABLE, MANIFEST_INVALID, ARCH_INCOMPATIBLE, or LIBRARY_MISSING;
+  INITIALIZED/INIT_FAILED come only from the live session probe.
 - Audio codecs: AAC and MP3 decode verified working in stock QtWebEngine
   6.11.2 via `decodeAudioData` (2026-10-29).
 - Amazon playback: the older 4.10.2662.3 build is rejected by Amazon's license
@@ -31,3 +34,17 @@
 - Known limitation: Qt builds may hardcode the `linux_x64` Widevine path; the
   app therefore maintains both `linux_x64` and `linux_arm64` symlinks in its
   user-level CDM directories.
+
+## Compatibility matrix
+
+Only publish VERIFIED when actual protected playback has been tested on that
+environment (spec section 9). Rows marked "not tested" are candidates, not
+claims.
+
+| Environment | Qt WebEngine | Widevine CDM | Playback |
+|---|---|---|---|
+| Fedora Asahi Remix 44 aarch64 | 6.11.2 (Chromium 140) | 4.10.3112.0 arm64 (component) preferred; 4.10.2662.3 arm64 rejected by license server (VMP_VALIDATION_FAILED) | CDM loads (MediaKeySession OK); protected playback unverified (needs account) |
+| Fedora x86_64 | not tested | not tested | not tested |
+| Fedora aarch64 (non-Asahi) | not tested | not tested | not tested |
+| Debian x86_64 | not tested | not tested | not tested |
+| Arch Linux x86_64 | not tested | not tested | not tested |

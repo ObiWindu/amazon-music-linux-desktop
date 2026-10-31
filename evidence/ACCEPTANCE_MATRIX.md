@@ -22,10 +22,10 @@
 | AC-18 | Audio output | Unverified | requires account |
 | AC-19 | Sustained playback | Unverified | requires account |
 | AC-20 | Media keys/tray | Partial | tray implemented |
-| AC-21 | Renderer failures handled | Implemented | main_window |
-| AC-22 | Unit tests pass | Verified | 30 passed |
+| AC-21 | Renderer failures handled | Implemented | main_window (reported to playback diagnostics) |
+| AC-22 | Unit tests pass | Verified | 158 passed (unit+security+integration offscreen) |
 | AC-23 | Security tests pass | Verified | 4 passed |
-| AC-24 | Lint/static pass | Verified | ruff+mypy |
+| AC-24 | Lint/static pass | Verified | ruff clean; mypy src --ignore-missing-imports clean |
 | AC-25 | RPM builds AArch64 | Verified | rpm built |
 | AC-26 | Installed RPM launches | Verified | staging install |
 | AC-27 | Desktop launcher | Implemented | desktop entry |
@@ -34,3 +34,11 @@
 | AC-30 | Documentation complete | Verified | docs/ |
 | AC-31 | No stubs | Verified | source audit |
 | AC-32 | Evidence complete | Verified | evidence/ |
+| AC-33 | Architecture detection correct; incompatible CDM rejected | Implemented | arch-aware check (host vs CDM ELF), unit tests |
+| AC-34 | CDM installs validated, not blindly skipped | Implemented | cdm_install_status + manifest validation, unit tests |
+| AC-35 | Playback state not solely top-level audio polling | Implemented | browser/playback_monitor.py event monitor, unit tests |
+| AC-36 | Playback failures classified | Implemented | browser/playback_diagnostics.py failure codes, unit tests |
+| AC-37 | Diagnostic exports redact sensitive info | Verified | capture-time redaction tests (incl. Bearer token case) |
+| AC-38 | MPRIS controls synchronize with playback | Implemented | integrations/mpris.py, unit tests; on-desktop verification pending |
+| AC-39 | Playback pipeline stages tracked honestly | Implemented | VERIFIED/FAILED/UNKNOWN/NOT_APPLICABLE model, unit tests |
+| AC-40 | Compatibility matrix documented | Verified | docs/DRM_COMPATIBILITY.md |

@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QPushButton, QTextEdit, QVBoxLayout
+from pathlib import Path
+
+from PySide6.QtGui import QDesktopServices, QUrl
+from PySide6.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+)
 
 from ..browser.drm_diagnostics import (
     CDM_PATH,
     CDM_SESSION_PROBE_JS,
     CDM_TEST_READ_JS,
     browser_info,
+    cdm_install_status,
     cdm_probe_state,
     cdm_version,
     detect_freeworld,
@@ -16,16 +26,20 @@ from ..browser.drm_diagnostics import (
     format_stage,
     parse_cdm_session_result,
     run_stage_a,
+    validate_cdm_manifest,
 )
 from ..services.health_check import collect_health
 from ..services.logging_service import get_logger
 
 log = get_logger("diagnostics")
 
+_TROUBLESHOOTING_DOC = Path(__file__).resolve().parents[2] / "docs" / "TROUBLESHOOTING.md"
+
 
 class DiagnosticsDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, playback_diagnostics=None):
         super().__init__(parent)
+        self._playback_diagnostics = playback_diagnostics
         self.setWindowTitle("Diagnostics")
         self.resize(720, 520)
         layout = QVBoxLayout(self)
@@ -38,10 +52,18 @@ class DiagnosticsDialog(QDialog):
         cdm_btn = QPushButton("Test CDM session")
         cdm_btn.setToolTip("Create a Widevine MediaKeySession: proves the CDM loads")
         cdm_btn.clicked.connect(self.test_cdm_session)
+        copy_btn = QPushButton("Copy report")
+        copy_btn.setToolTip("Copy the redacted diagnostic report to the clipboard")
+        copy_btn.clicked.connect(self.copy_report)
+        docs_btn = QPushButton("Troubleshooting")
+        docs_btn.setToolTip("Open the troubleshooting documentation")
+        docs_btn.clicked.connect(self.open_troubleshooting)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
         btns.addWidget(run_btn)
         btns.addWidget(cdm_btn)
+        btns.addWidget(copy_btn)
+        btns.addWidget(docs_btn)
         btns.addWidget(close_btn)
         layout.addLayout(btns)
         self.run()
@@ -123,13 +145,19 @@ class DiagnosticsDialog(QDialog):
             self._cdm_note(f"in progress: {stage}")
         else:
             if isinstance(raw, dict):
-                self._cdm_finish(format_stage(parse_cdm_session_result(raw)))
+                stage_result = parse_cdm_session_result(raw)
+                self._cdm_finish(format_stage(stage_result), ok=stage_result.ok)
             else:
                 self._cdm_finish(f"unexpected raw value: {raw!r}")
             return
         QTimer.singleShot(1500, self._cdm_poll)
 
-    def _cdm_finish(self, message: str) -> None:
+    def _cdm_finish(self, message: str, ok: bool | None = None) -> None:
+        # Live evidence from the CDM session probe feeds the pipeline model:
+        # success here proves the CDM loads, nothing more.
+        diagnostics = self._playback_diagnostics
+        if diagnostics is not None and ok is not None:
+            diagnostics.note_cdm_session(ok, error=None if ok else message)
         current = self.text.toPlainText()
         version = cdm_version(find_usable_cdm())
         self.text.setPlainText(
@@ -165,6 +193,16 @@ class DiagnosticsDialog(QDialog):
         lines.append(f"CDM system path: {CDM_PATH}")
         lines.append(f"CDM in use: {selected_cdm or 'none'}")
         lines.append(f"CDM version: {cdm_version(selected_cdm)}")
+        lines.append(f"CDM install status: {cdm_install_status(selected_cdm)}")
+        manifest_result = validate_cdm_manifest(selected_cdm or CDM_PATH)
+        lines.append(
+            "CDM manifest validity: "
+            + (
+                f"invalid: {manifest_result.error}"
+                if not manifest_result.ok
+                else "valid"
+            )
+        )
         lines.append(
             "CDM selection: newest readable build across system and "
             "user-level Chromium directories"
@@ -173,4 +211,29 @@ class DiagnosticsDialog(QDialog):
         lines.append(f"libavcodec-freeworld (Fedora freeworld codec library): {freeworld}")
         lines.append("note: AAC/MP3 decode verified working in this WebEngine build;")
         lines.append("use 'Test CDM session' to check whether the CDM itself loads.")
+        # playback state + pipeline (remediation spec 5)
+        monitor = getattr(self.parent(), "monitor", None)
+        if monitor is not None:
+            lines.append("")
+            lines.append("=== Playback ===")
+            lines.append(f"state: {monitor.state.value}")
+            lines.append(f"position: {monitor.position:.1f}s / {monitor.duration:.1f}s")
+            lines.append(f"last media event: {monitor.last_event or 'none'}")
+        from ..browser.playback_diagnostics import PlaybackDiagnostics
+
+        diagnostics = self._playback_diagnostics or PlaybackDiagnostics()
+        lines.append("")
+        lines.append(diagnostics.to_report())
         self.text.setPlainText("\n".join(lines))
+
+    def build_report(self) -> str:
+        return self.text.toPlainText()
+
+    def copy_report(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(self.text.toPlainText())
+
+    def open_troubleshooting(self) -> None:
+        if _TROUBLESHOOTING_DOC.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(_TROUBLESHOOTING_DOC)))

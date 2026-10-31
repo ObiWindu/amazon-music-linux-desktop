@@ -9,6 +9,9 @@ A native desktop application for Amazon Music on Linux, built with Python 3, PyS
 - Regional homepage selection (France, US, UK, Germany) with persisted preference.
 - Amazon Music-like shell: left sidebar (Home, Search, Library, Playlists, Favorites), embedded settings page, bottom player/status bar.
 - Widevine DRM diagnostics and automatic user-level CDM directory setup.
+- Playback monitor: normalized playback state from browser media events (not just DOM polling), with stall/error detection and a playback pipeline diagnostic model.
+- Settings → Playback diagnostics: run diagnostics, copy a redacted report, open troubleshooting documentation.
+- MPRIS D-Bus integration: desktop media controls and metadata sync (the browser page remains the playback authority).
 - Origin security policy with hostname boundary checks; dangerous schemes blocked.
 - Download confirmation and destination validation.
 - Restrictive file permissions (0700) for profile and config data.
@@ -82,7 +85,7 @@ Or use the helper:
 2. Sign in through Amazon's own login flow (no credentials are collected by the app).
 3. Use the sidebar to navigate Home, Search, Library, Playlists, and Favorites.
 4. Open **Settings** (sidebar) to change region, homepage, window size, tray, etc.
-5. Use **Diagnostics** to inspect system, browser, and Widevine status.
+5. Use **Diagnostics** to inspect system, browser, Widevine, and playback-pipeline status (also under **Settings → Playback diagnostics**, with report copy and troubleshooting links).
 6. **Clear site data** from the File menu to sign out.
 
 ## Keyboard shortcuts

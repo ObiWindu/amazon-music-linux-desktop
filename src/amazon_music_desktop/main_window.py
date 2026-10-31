@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
+from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
@@ -23,6 +25,8 @@ from PySide6.QtWidgets import (
 
 from .browser.download_policy import default_download_dir, safe_filename, validate_destination
 from .browser.navigation import NavigationDecision, NavigationPolicy
+from .browser.playback_diagnostics import PlaybackDiagnostics
+from .browser.playback_monitor import PLAYBACK_MONITOR_JS, PlaybackMonitor, PlaybackState
 from .browser.player_bridge import (
     NOW_PLAYING_PROBE_JS,
     QUEUE_PROBE_JS,
@@ -33,6 +37,7 @@ from .browser.player_bridge import (
     volume_js,
 )
 from .browser.profile import ProfileManager
+from .integrations.mpris import MprisService
 from .services.configuration import ConfigService
 from .services.desktop_integration import create_tray, tray_available
 from .services.logging_service import get_logger
@@ -45,12 +50,16 @@ log = get_logger("main_window")
 
 
 class WebPage(QWebEnginePage):
-    def __init__(self, profile, policy, parent=None):
+    def __init__(self, profile, policy, diagnostics=None, parent=None):
         super().__init__(profile, parent)
         self.policy = policy
+        self.diagnostics = diagnostics
 
     def javaScriptConsoleMessage(self, level, message, line, source):
         log.info("JS console: %s %s (line %s)", level, message, line)
+        diagnostics = self.diagnostics
+        if diagnostics is not None and level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
+            diagnostics.record_console_error(message, source=source, line=line)
 
     def acceptNavigationRequest(self, url, nav_type, is_main_frame):
         decision = self.policy.decide(url.toString())
@@ -123,6 +132,14 @@ class MainWindow(QMainWindow):
         self._last_dur = 0.0
         self._track_key = ""
         self._poll_count = 0
+        self._track_title = ""
+        self._track_artist = ""
+        self._encrypted_noted_at = 0.0
+
+        # playback observability (remediation spec 3): the monitor normalizes
+        # browser media events, the diagnostics collector classifies failures.
+        self.playback_diagnostics = PlaybackDiagnostics()
+        self.monitor = PlaybackMonitor(on_state_changed=self._on_playback_state_changed)
 
         # central: sidebar + stacked content
         central = QWidget(self)
@@ -154,6 +171,11 @@ class MainWindow(QMainWindow):
         for b in (self.btn_home, self.btn_search, self.btn_library, self.btn_playlists, self.btn_favorites):
             sb_layout.addWidget(b)
 
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #a6adc8; font-size: 11px; padding: 4px 8px;")
+        self.status_label.setWordWrap(True)
+        sb_layout.addWidget(self.status_label)
+
         sb_layout.addStretch()
 
         self.btn_settings = _sidebar_button("⚙  Settings", "Settings")
@@ -174,7 +196,7 @@ class MainWindow(QMainWindow):
         # browser page: the view is docked with its bottom strip (where the
         # page's own player bar renders) outside the visible window area.
         self.view = QWebEngineView()
-        self.page = WebPage(self.profile, self.policy, self.view)
+        self.page = WebPage(self.profile, self.policy, self.playback_diagnostics, self.view)
         self.view.setPage(self.page)
         self.browser_page = _BrowserHost(self.view)
         self.stack.addWidget(self.browser_page)
@@ -240,6 +262,10 @@ class MainWindow(QMainWindow):
         self.page.renderProcessTerminated.connect(self._on_render_terminated)
         self.profile.downloadRequested.connect(self._on_download_requested)
 
+        # desktop integration: MPRIS after the page and widgets exist. On
+        # systems without a session bus the service simply stays unregistered.
+        self.mpris = MprisService(self)
+
         # wire
         self.btn_home.clicked.connect(lambda: self._nav("home"))
         self.btn_search.clicked.connect(lambda: self._nav("search"))
@@ -251,6 +277,11 @@ class MainWindow(QMainWindow):
         self.btn_queue.clicked.connect(self.toggle_queue)
         self.settings_page.apply_btn.clicked.connect(self.apply_settings)
         self.settings_page.reset_btn.clicked.connect(self.reset_settings)
+        self.settings_page.set_playback_actions(
+            run=self.show_diagnostics,
+            copy_report=self._copy_playback_report,
+            open_docs=self._open_troubleshooting,
+        )
 
         self._setup_tray()
         self._setup_shortcuts()
@@ -292,7 +323,26 @@ class MainWindow(QMainWindow):
 
     def show_diagnostics(self):
         from .ui.diagnostics_dialog import DiagnosticsDialog
-        DiagnosticsDialog(self).exec()
+        DiagnosticsDialog(self, playback_diagnostics=self.playback_diagnostics).exec()
+
+    def _playback_diagnostics_report(self) -> str:
+        """Assemble the full, redacted diagnostic report (spec 5)."""
+        from .ui.diagnostics_dialog import DiagnosticsDialog
+        return DiagnosticsDialog(self, playback_diagnostics=self.playback_diagnostics).build_report()
+
+    def _copy_playback_report(self) -> None:
+        try:
+            QApplication.clipboard().setText(self._playback_diagnostics_report())
+            self.status_label.setText("Diagnostic report copied")
+        except Exception as exc:
+            log.warning("copy diagnostic report failed: %s", exc)
+
+    def _open_troubleshooting(self) -> None:
+        doc = Path(__file__).resolve().parents[2] / "docs" / "TROUBLESHOOTING.md"
+        if doc.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(doc)))
+        else:
+            self.status_label.setText(f"Documentation not found: {doc.name}")
 
     def toggle_queue(self):
         self.queue_panel.setVisible(not self.queue_panel.isVisible())
@@ -375,13 +425,33 @@ class MainWindow(QMainWindow):
     def _poll_now_playing(self):
         # Read-only probe of the page player state. The page DOM is never
         # modified from here (see _BrowserHost for player-bar suppression).
+        # The media-event monitor is the primary state source; this probe
+        # remains as the fallback (remediation spec 3.3).
         self._poll_count = (self._poll_count + 1) % 5
         try:
             self.view.page().runJavaScript(NOW_PLAYING_PROBE_JS, self._on_np_result)
+            self.view.page().runJavaScript(PLAYBACK_MONITOR_JS, self._on_monitor_state)
             if self._poll_count == 0 and self.queue_panel.list.isVisible():
                 self.view.page().runJavaScript(QUEUE_PROBE_JS, self._on_queue_result)
         except Exception as exc:
             log.warning("now-playing poll failed: %s", exc)
+        if self.monitor.detect_stalled():
+            # detect_stalled flipped the state to STALLED; the transition is
+            # surfaced by _on_playback_state_changed (UI, MPRIS, diagnostics).
+            pass
+
+    def _on_monitor_state(self, result) -> None:
+        payload = None
+        if isinstance(result, str) and result:
+            try:
+                payload = json.loads(result)
+            except ValueError:
+                payload = None
+        self.monitor.update_from_browser(payload)
+        for event in self.monitor.events:
+            if event.name == "encrypted" and event.timestamp > self._encrypted_noted_at:
+                self._encrypted_noted_at = event.timestamp
+                self.playback_diagnostics.note_encrypted_media(event.timestamp)
 
     def _on_queue_result(self, result):
         songs = parse_queue_result(result)
@@ -405,7 +475,13 @@ class MainWindow(QMainWindow):
             self.queue_panel.on_track(title, artist)
         if title and title != self._track_key:
             self._track_key = title
+            self._track_title = title
+            self._track_artist = artist
             self.now_playing.set_track(title)
+            # a new track is being played: the pipeline restarts
+            self.playback_diagnostics.note_track_selected()
+            if self.mpris is not None:
+                self.mpris.advance_track()
         self.player_bar.set_state(state)
         self.now_playing.set_playing(playing)
     def _on_url_changed(self, url):
@@ -419,14 +495,39 @@ class MainWindow(QMainWindow):
 
     def _on_load_finished(self, ok):
         if not ok:
+            self.playback_diagnostics.note_page_loaded(url=self.current_url(), ok=False)
             self.status_label.setText("Failed to load")
             return
+        self.playback_diagnostics.note_page_loaded(url=self.current_url(), ok=True)
         self.status_label.setText("")
-        # The page's own player bar renders in the docked (clipped) strip of
-        # the browser host; nothing to do here. Playback is controlled and
-        # mirrored through the native bar and the read-only state probe.
+        # Attach the read-only media-event instrumentation. Idempotent: the
+        # page-side marker guard makes re-injection a no-op, and the SPA's
+        # own re-navigations wipe it, so every load re-attaches.
+        try:
+            self.view.page().runJavaScript(PLAYBACK_MONITOR_JS, self._on_monitor_state)
+        except Exception as exc:
+            log.warning("playback instrumentation failed: %s", exc)
+
+    def _on_playback_state_changed(self, state) -> None:
+        playing = state == PlaybackState.PLAYING
+        self.now_playing.set_playing(playing)
+        if self.mpris is not None:
+            self.mpris.update_playback()
+        diagnostics = self.playback_diagnostics
+        if state == PlaybackState.ERROR:
+            diagnostics.record_media_error(self.monitor.last_error or "playback failed")
+            self.status_label.setText("Playback failed")
+        elif state == PlaybackState.STALLED:
+            diagnostics.classify("playback stopped progressing")
+            self.status_label.setText("Playback stalled")
+        elif playing and self.monitor.duration > 0:
+            # The page fired 'playing': audio is actually being produced,
+            # which is direct evidence for the two final pipeline stages.
+            diagnostics.note_media_decoding()
+            diagnostics.note_audio_output()
 
     def _on_render_terminated(self, status, code):
+        self.playback_diagnostics.record_renderer_termination(status, code)
         log.error("render process terminated: status=%s code=%s", status, code)
         QMessageBox.warning(self, "Renderer error", "Renderer stopped. Reloading.")
         self.view.reload()

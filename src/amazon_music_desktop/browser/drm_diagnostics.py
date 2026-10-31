@@ -322,11 +322,22 @@ def check_library_presence(cdm_path: Path = CDM_PATH) -> StageResult:
         details["mode"] = oct(st.st_mode & 0o777)
     except OSError as exc:
         return StageResult("A_library_presence", False, details, str(exc))
-    # ELF arch
+    # ELF arch: validated against the *host* runtime architecture, never a
+    # hard-coded one (remediation spec 2.1).
     arch = _elf_arch(cdm_path)
     details["arch"] = arch
-    if arch != "aarch64":
-        return StageResult("A_library_presence", False, details, f"unexpected architecture: {arch}")
+    host = _host_elf_arch()
+    if host is not None:
+        details["host_arch"] = host
+    if arch == "not-elf":
+        return StageResult("A_library_presence", False, details, "CDM file is not an ELF library")
+    if host is not None and arch in ("aarch64", "x86_64") and arch != host:
+        return StageResult(
+            "A_library_presence",
+            False,
+            details,
+            f"architecture mismatch: CDM is {arch}, host is {host}",
+        )
     # deps
     deps_ok, deps_out = _ldd(cdm_path)
     details["deps_ok"] = deps_ok
@@ -490,6 +501,76 @@ def ensure_widevine_user_dir() -> None:
                 log.info("updated user-level WidevineCdm dir %s -> %s", target, cdm)
         except OSError as exc:
             log.debug("could not prepare widevine dir %s: %s", target, exc)
+
+
+CDM_ARCH_FOR_HOST: dict[str, str] = {"x86_64": "x64", "aarch64": "arm64"}
+
+
+def host_cdm_arch() -> str | None:
+    """Return the expected Widevine manifest arch for this host, if known."""
+    return CDM_ARCH_FOR_HOST.get(_host_elf_arch() or "")
+
+
+def validate_cdm_manifest(cdm: Path) -> StageResult:
+    """Validate the Widevine manifest next to *cdm* (remediation spec 2.2)."""
+    details: dict[str, Any] = {"path": str(cdm)}
+    manifest = _manifest_for(cdm)
+    if not manifest:
+        return StageResult("D_manifest", False, details, "manifest.json missing or unreadable")
+    version = manifest.get("version")
+    if not isinstance(version, str) or not version:
+        return StageResult("D_manifest", False, details, "manifest.json has no version")
+    details["version"] = version
+    archs = sorted(
+        {
+            arch
+            for entry in manifest.get("platforms", [])
+            if isinstance(entry, dict)
+            for arch in [entry.get("arch")]
+            if isinstance(arch, str)
+        }
+    )
+    details["manifest_archs"] = archs
+    expected = host_cdm_arch()
+    if expected and archs and expected not in archs:
+        return StageResult(
+            "D_manifest",
+            False,
+            details,
+            f"manifest platforms {archs} do not include {expected}",
+        )
+    return StageResult("D_manifest", True, details)
+
+
+def cdm_install_status(cdm: Path | None) -> str:
+    """Classify a discovered CDM installation at the filesystem level.
+
+    One of NOT_INSTALLED, NOT_DISCOVERABLE, MANIFEST_INVALID,
+    ARCH_INCOMPATIBLE, LIBRARY_MISSING. Initialization results (INIT_FAILED /
+    INITIALIZED) are only observable through the live CDM session probe in
+    the diagnostics dialog and are never inferred here.
+    """
+    if cdm is None:
+        return "NOT_INSTALLED"
+    if not cdm.exists():
+        return "NOT_INSTALLED"
+    if not cdm.is_file():
+        return "NOT_DISCOVERABLE"
+    try:
+        if not os.access(cdm, os.R_OK):
+            return "LIBRARY_MISSING"
+        arch = _elf_arch(cdm)
+    except OSError:
+        return "LIBRARY_MISSING"
+    if arch == "not-elf":
+        return "LIBRARY_MISSING"
+    host = _host_elf_arch()
+    if host is not None and arch in ("aarch64", "x86_64") and arch != host:
+        return "ARCH_INCOMPATIBLE"
+    manifest = _manifest_for(cdm)
+    if not manifest:
+        return "MANIFEST_INVALID"
+    return "INITIALIZED"
 
 
 def run_stage_a() -> StageResult:

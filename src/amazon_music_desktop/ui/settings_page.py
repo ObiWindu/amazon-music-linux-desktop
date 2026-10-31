@@ -57,6 +57,21 @@ class SettingsPage(QWidget):
         form.addRow("", self.media_keys_check)
         form.addRow("", self.dev_diag_check)
 
+        # Playback diagnostics (remediation spec 5): dedicated actions wired
+        # by the main window; the report itself is generated there so the
+        # section reflects live monitor state.
+        playback_row = QHBoxLayout()
+        self.playback_run_btn = QPushButton("Run diagnostics")
+        self.playback_run_btn.setToolTip("Collect playback and DRM diagnostics")
+        self.playback_copy_btn = QPushButton("Copy diagnostic report")
+        self.playback_copy_btn.setToolTip("Copy the redacted diagnostic report")
+        self.playback_docs_btn = QPushButton("Open troubleshooting documentation")
+        playback_row.addWidget(self.playback_run_btn)
+        playback_row.addWidget(self.playback_copy_btn)
+        playback_row.addWidget(self.playback_docs_btn)
+        playback_row.addStretch()
+        form.addRow("Playback diagnostics", playback_row)
+
         layout.addLayout(form)
         layout.addStretch()
 
@@ -85,3 +100,9 @@ class SettingsPage(QWidget):
         config.media_keys_enabled = self.media_keys_check.isChecked()
         config.developer_diagnostics = self.dev_diag_check.isChecked()
         config.validate()
+
+    def set_playback_actions(self, run, copy_report, open_docs) -> None:
+        """Wire the playback diagnostics actions (provided by the main window)."""
+        self.playback_run_btn.clicked.connect(run)
+        self.playback_copy_btn.clicked.connect(copy_report)
+        self.playback_docs_btn.clicked.connect(open_docs)

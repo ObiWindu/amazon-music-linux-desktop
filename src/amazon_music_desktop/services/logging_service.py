@@ -10,9 +10,12 @@ from logging.handlers import RotatingFileHandler
 from .configuration import LOG_DIR
 
 SENSITIVE_PATTERNS: list[re.Pattern[str]] = [
+    # Bearer tokens must be matched before the key=value patterns below,
+    # which would otherwise consume only the header name ("authorization: B")
+    # and leave the credential itself in the output.
+    re.compile(r"(?i)Bearer\s+[A-Za-z0-9._\-]+"),
     re.compile(r"(?i)(password|passwd|pwd)\s*[=:]\s*\S+"),
     re.compile(r"(?i)(cookie|session|token|authorization|license)\s*[=:]\s*\S+"),
-    re.compile(r"(?i)Bearer\s+[A-Za-z0-9._\-]+"),
 ]
 
 SENSITIVE_QUERY_KEYS = {"token", "access_token", "session", "auth", "password", "code", "state"}
