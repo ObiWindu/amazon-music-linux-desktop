@@ -144,11 +144,79 @@ def test_record_console_error_redacts_and_sanitizes():
     assert event.details["line"] == 42
 
 
+def test_vmp_console_error_marks_license_stage_failed():
+    diagnostics = PlaybackDiagnostics()
+    diagnostics.record_console_error(
+        "denialReason: VMP_VALIDATION_FAILED (UNVERIFIED request not eligible for LD content)",
+        source="https://music.amazon.fr/zaz",
+    )
+    summary = diagnostics.pipeline.summary()
+    # direct evidence: the license operation was attempted and rejected
+    assert summary["license_acquisition_attempted"] == "FAILED"
+    assert diagnostics.failure_code == FailureCode.LICENSE_FAILED
+    stage = diagnostics.pipeline.get("license_acquisition_attempted")
+    assert "VMP_VALIDATION_FAILED" in stage.error
+
+
+def test_vmp_console_error_is_redacted():
+    diagnostics = PlaybackDiagnostics()
+    diagnostics.record_console_error("license request failed: token=supersecret")
+    event = diagnostics.events[0]
+    assert "supersecret" not in event.message
+    assert "supersecret" not in diagnostics.to_report()
+
+
+def test_unrelated_console_error_keeps_license_stage_unknown():
+    diagnostics = PlaybackDiagnostics()
+    diagnostics.record_console_error("uncaught TypeError: x is undefined")
+    summary = diagnostics.pipeline.summary()
+    assert summary["license_acquisition_attempted"] == "UNKNOWN"
+    assert diagnostics.failure_code is None
+
+
+def test_timeline_builder_orders_stages_with_evidence():
+    diagnostics = PlaybackDiagnostics()
+    diagnostics.note_page_loaded(ok=True)
+    diagnostics.note_track_selected()
+    diagnostics.note_encrypted_media(timestamp=7.0)
+    diagnostics.record_console_error("denialReason: VMP_VALIDATION_FAILED")
+
+    timeline = diagnostics.build_timeline()
+    assert [e["stage"] for e in timeline] == list(PLAYBACK_PIPELINE_STAGES)
+    by_name = {e["stage"]: e for e in timeline}
+    assert by_name["amazon_music_page_loaded"]["observed"] is True
+    assert by_name["amazon_music_page_loaded"]["status"] == "VERIFIED"
+    assert by_name["encrypted_media_detected"]["timestamp"] == 7.0
+    assert by_name["license_acquisition_attempted"]["observed"] is True
+    assert by_name["license_acquisition_attempted"]["status"] == "FAILED"
+    # never-observed stages stay in the timeline as UNKNOWN
+    assert by_name["media_decoding_started"]["observed"] is False
+    assert by_name["media_decoding_started"]["status"] == "UNKNOWN"
+
+
+def test_timeline_report_rendering():
+    diagnostics = PlaybackDiagnostics()
+    diagnostics.note_track_selected()
+    report = diagnostics.timeline_report()
+    assert "Playback attempt timeline:" in report
+    assert "Track selection initiated: VERIFIED" in report
+    assert "Media decoding started: UNKNOWN" in report
+
+
 def test_record_renderer_termination():
     diagnostics = PlaybackDiagnostics()
     diagnostics.record_renderer_termination("Crashed", 11)
     assert diagnostics.last_error == "render process terminated: status=Crashed code=11"
     assert diagnostics.events[0].details == {"status": "Crashed", "code": 11}
+
+
+def test_player_action_miss_is_recorded_not_classified():
+    diagnostics = PlaybackDiagnostics()
+    diagnostics.record_player_action_missed("next")
+    assert [e.kind for e in diagnostics.events] == ["player_action_missed"]
+    assert diagnostics.events[0].details == {"action": "next"}
+    # a missed transport action is not a playback failure
+    assert diagnostics.failure_code is None
 
 
 def test_record_media_error_classifies_decode_failure():

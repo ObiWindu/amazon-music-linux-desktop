@@ -76,6 +76,25 @@ class FailureCode(str, Enum):
 
 PlaybackErrorCode = FailureCode
 
+# Console-message markers that constitute direct evidence that a license
+# request was attempted and rejected — e.g. Amazon's documented HTTP 400
+# `denialReason: VMP_VALIDATION_FAILED`. Only the error text is captured
+# (redacted); license bodies, headers, and keys are never stored.
+LICENSE_FAILURE_MARKERS: tuple[str, ...] = (
+    "vmp_validation_failed",
+    "vmp validation failed",
+    "denialreason",
+    "license request failed",
+    "license request rejected",
+    "license denied",
+)
+
+
+def looks_like_license_failure(message: str) -> bool:
+    """True when a console error is direct evidence of license rejection."""
+    low = str(message or "").lower()
+    return any(marker in low for marker in LICENSE_FAILURE_MARKERS)
+
 
 @dataclass
 class PipelineStage:
@@ -222,11 +241,21 @@ class PlaybackDiagnostics:
     def record_console_error(
         self, message: str, source: str | None = None, line: int | None = None
     ) -> DiagnosticEvent:
-        return self._record(
+        event = self._record(
             "console_error",
             message,
             {"source": sanitize_url(source) if source else None, "line": line},
         )
+        if looks_like_license_failure(message):
+            # Direct evidence from the page: a license operation was attempted
+            # and rejected. This is the only way this stage becomes FAILED.
+            self.pipeline.mark(
+                "license_acquisition_attempted",
+                DiagnosticStatus.FAILED,
+                error=event.message,
+            )
+            self._failure_code = FailureCode.LICENSE_FAILED
+        return event
 
     def record_load_error(
         self, url: str | None = None, error: str | None = None
@@ -249,6 +278,15 @@ class PlaybackDiagnostics:
     def record_media_error(self, message: str, **details: Any) -> DiagnosticEvent:
         self.classify(message, **details)
         return self._record("media_error", message, details)
+
+    def record_player_action_missed(self, action: str) -> DiagnosticEvent:
+        """A transport action found no target on the page: observable, and
+        never a false success — the UI only updates from the page probe."""
+        return self._record(
+            "player_action_missed",
+            f"transport action had no target on the page: {action}",
+            {"action": action},
+        )
 
     # --- pipeline stage evidence -----------------------------------------
 
@@ -320,6 +358,31 @@ class PlaybackDiagnostics:
             self._failure_code = FailureCode.UNKNOWN_PLAYBACK_ERROR
 
     # --- reporting ---------------------------------------------------------
+
+    def build_timeline(self) -> list[dict[str, Any]]:
+        """Ordered per-stage timeline for one playback attempt (Phase 1).
+
+        Stages without evidence report UNKNOWN; NOT_APPLICABLE stages were
+        never observable through public browser APIs in the first place.
+        """
+        timeline: list[dict[str, Any]] = []
+        for stage in self.pipeline.stages():
+            entry = stage.to_dict()
+            entry["observed"] = stage.status in (
+                DiagnosticStatus.VERIFIED,
+                DiagnosticStatus.FAILED,
+            )
+            timeline.append(entry)
+        return timeline
+
+    def timeline_report(self) -> str:
+        lines = ["Playback attempt timeline:"]
+        for entry in self.build_timeline():
+            stamp = f"{entry['timestamp']:.3f}" if entry["timestamp"] else "-"
+            lines.append(f"[{stamp}] {entry['label']}: {entry['status']}")
+            if entry["error"]:
+                lines.append(f"    error: {entry['error']}")
+        return "\n".join(lines)
 
     def to_report(self) -> str:
         lines: list[str] = []
