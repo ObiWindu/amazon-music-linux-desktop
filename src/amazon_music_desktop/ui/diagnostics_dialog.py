@@ -21,6 +21,7 @@ from ..browser.drm_diagnostics import (
     cdm_install_status,
     cdm_probe_state,
     cdm_version,
+    cdm_version_comparison,
     detect_freeworld,
     find_usable_cdm,
     format_stage,
@@ -211,6 +212,25 @@ class DiagnosticsDialog(QDialog):
         lines.append(f"libavcodec-freeworld (Fedora freeworld codec library): {freeworld}")
         lines.append("note: AAC/MP3 decode verified working in this WebEngine build;")
         lines.append("use 'Test CDM session' to check whether the CDM itself loads.")
+        lines.append("")
+        lines.append("=== CDM inventory ===")
+        comparison = cdm_version_comparison()
+        for cand in comparison["candidates"]:
+            marker = " (selected)" if cand["selected"] else ""
+            version = cand["version"] or "unknown version"
+            match = cand["arch_match"]
+            match_s = (
+                "host-matching arch"
+                if match
+                else ("ARCH MISMATCH" if match is False else "arch unknown")
+            )
+            valid = "manifest OK" if cand["manifest_valid"] else "manifest INVALID"
+            lines.append(
+                f"- {cand['path']}: {version}, {cand['arch']}, {match_s}, {valid}{marker}"
+            )
+        if not comparison["candidates"]:
+            lines.append("- no CDM binaries discovered")
+        lines.append(f"Qt WebEngine CDM load: {comparison['qt_webengine_loaded']}")
         # playback state + pipeline (remediation spec 5)
         monitor = getattr(self.parent(), "monitor", None)
         if monitor is not None:

@@ -1,3 +1,5 @@
+import json
+import struct
 from pathlib import Path
 
 import pytest
@@ -316,3 +318,96 @@ def test_detect_freeworld_checks_libavcodec_freeworld(monkeypatch):
 
     monkeypatch.setattr(d.subprocess, "run", boom)
     assert d.detect_freeworld() is None
+
+
+# --- CDM inventory and version comparison (spec 4.4) -------------------------
+
+
+def _elf_bytes(machine: int) -> bytes:
+    # minimal ELF: magic + 64-bit LE class/data + e_machine at offset 18
+    return b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 10 + struct.pack("<H", machine)
+
+
+def _make_cdm(path: Path, version: str | None, machine: int = 183) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_elf_bytes(machine) + b"\x00" * 16)
+    if version is not None:
+        path.parent.joinpath("manifest.json").write_text(json.dumps({"version": version}))
+    return path
+
+
+def _isolate_cdm_roots(tmp_path, monkeypatch, machine: str = "aarch64"):
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    monkeypatch.setattr(d.platform, "machine", lambda: machine)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    return d
+
+
+def test_cdm_inventory_lists_and_marks_selected(tmp_path, monkeypatch):
+    d = _isolate_cdm_roots(tmp_path, monkeypatch)
+    old = _make_cdm(tmp_path / "system" / "libwidevinecdm.so", "4.10.2662.3")
+    new = _make_cdm(
+        tmp_path / "home" / ".config" / "chromium" / "WidevineCdm" / "4.10.3112.0"
+        / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so",
+        "4.10.3112.0",
+    )
+    monkeypatch.setattr(d, "CDM_PATH", old)
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "widevine")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+
+    inventory = d.cdm_inventory()
+    by_path = {e["path"]: e for e in inventory}
+    assert len(inventory) == 2
+    assert by_path[str(new)]["selected"] is True
+    assert by_path[str(new)]["version"] == "4.10.3112.0"
+    assert by_path[str(old)]["selected"] is False
+    assert by_path[str(old)]["version"] == "4.10.2662.3"
+    assert all(e["arch_match"] is True for e in by_path.values())
+    assert all(e["manifest_valid"] for e in by_path.values())
+
+
+def test_cdm_inventory_flags_arch_mismatch(tmp_path, monkeypatch):
+    d = _isolate_cdm_roots(tmp_path, monkeypatch, machine="x86_64")
+    wrong = _make_cdm(tmp_path / "system" / "libwidevinecdm.so", None, machine=183)
+    monkeypatch.setattr(d, "CDM_PATH", wrong)
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "widevine")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+
+    inventory = d.cdm_inventory()
+    assert inventory[0]["arch_match"] is False
+    assert inventory[0]["selected"] is False  # never selected on this host
+
+
+def test_cdm_version_comparison_distinguishes_system_and_selected(tmp_path, monkeypatch):
+    d = _isolate_cdm_roots(tmp_path, monkeypatch)
+    old = _make_cdm(tmp_path / "system" / "libwidevinecdm.so", "4.10.2662.3")
+    new = _make_cdm(
+        tmp_path / "home" / ".config" / "chromium" / "WidevineCdm" / "4.10.3112.0"
+        / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so",
+        "4.10.3112.0",
+    )
+    monkeypatch.setattr(d, "CDM_PATH", old)
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "widevine")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+
+    comparison = d.cdm_version_comparison()
+    assert comparison["system_cdm"]["version"] == "4.10.2662.3"
+    assert comparison["selected_cdm"]["version"] == "4.10.3112.0"
+    assert comparison["selected_cdm"]["path"] == str(new)
+    assert comparison["flag_passed"] == f"--widevine-cdm-path={new}"
+    # the actually loaded CDM is not observable through public APIs
+    assert "not directly observable" in comparison["qt_webengine_loaded"]
+
+
+def test_cdm_version_comparison_without_any_cdm(tmp_path, monkeypatch):
+    d = _isolate_cdm_roots(tmp_path, monkeypatch)
+    monkeypatch.setattr(d, "CDM_PATH", tmp_path / "none.so")
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "widevine")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+
+    comparison = d.cdm_version_comparison()
+    assert comparison["system_cdm"]["present"] is False
+    assert comparison["selected_cdm"]["path"] is None
+    assert comparison["flag_passed"] is None
+    assert comparison["candidates"] == []

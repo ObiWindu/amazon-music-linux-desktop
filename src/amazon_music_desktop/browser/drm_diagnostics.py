@@ -573,6 +573,65 @@ def cdm_install_status(cdm: Path | None) -> str:
     return "INITIALIZED"
 
 
+def cdm_inventory() -> list[dict[str, Any]]:
+    """All discoverable CDM binaries with validation details.
+
+    Each entry records the manifest version (when present), the actual ELF
+    architecture, whether it matches the host, and whether discovery selected
+    it. Newest is not claimed to be most compatible — selection prefers the
+    newest because the license server rejected the old 2022 ARM64 build.
+    """
+    host = _host_elf_arch()
+    selected = find_usable_cdm()
+    entries: list[dict[str, Any]] = []
+    for path in _candidate_paths():
+        try:
+            if not path.is_file() or not os.access(path, os.R_OK):
+                continue
+            size = path.stat().st_size
+        except OSError:
+            continue
+        manifest = _manifest_for(path)
+        version = manifest.get("version")
+        entries.append(
+            {
+                "path": str(path),
+                "version": version if isinstance(version, str) else None,
+                "arch": _elf_arch(path),
+                "manifest_valid": bool(manifest),
+                "arch_match": (_elf_arch(path) == host) if host else None,
+                "size": size,
+                "selected": path == selected,
+            }
+        )
+    return entries
+
+
+def cdm_version_comparison() -> dict[str, Any]:
+    """Compare system vs selected vs flag-passed CDM (remediation spec 4.4).
+
+    The CDM Qt WebEngine actually loaded is not observable through public
+    APIs; the live CDM session probe in the diagnostics dialog is the check
+    for that, and its result is recorded in the playback pipeline.
+    """
+    selected = find_usable_cdm()
+    system_present = CDM_PATH.is_file()
+    return {
+        "system_cdm": {
+            "path": str(CDM_PATH),
+            "present": system_present,
+            "version": cdm_version(CDM_PATH) if system_present else None,
+        },
+        "selected_cdm": {
+            "path": str(selected) if selected else None,
+            "version": cdm_version(selected) if selected else None,
+        },
+        "flag_passed": build_widevine_flags(selected, "") if selected else None,
+        "candidates": cdm_inventory(),
+        "qt_webengine_loaded": "not directly observable; use the live CDM session probe",
+    }
+
+
 def run_stage_a() -> StageResult:
     return check_library_presence(find_usable_cdm() or CDM_PATH)
 
