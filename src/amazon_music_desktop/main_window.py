@@ -378,6 +378,9 @@ class MainWindow(QMainWindow):
     def _on_action_result(self, action: str, ok) -> None:
         if not ok:
             log.warning("player action %s: no matching control on page", action)
+            # observable, and never a false success: the UI state comes from
+            # the page probe, not from the action
+            self.playback_diagnostics.record_player_action_missed(action)
 
     def _set_player_volume(self, value: int) -> None:
         try:
