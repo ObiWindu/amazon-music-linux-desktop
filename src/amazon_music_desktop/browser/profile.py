@@ -43,8 +43,15 @@ class ProfileManager:
         profile.setPersistentCookiesPolicy(
             QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies
         )
+        # Architecture-aware UA: Amazon serves different builds per arch and
+        # the Widevine VMP check covers the execution environment, so the UA
+        # must never claim an architecture we are not running on.
+        import platform as _platform
+
+        _machine = _platform.machine().lower()
+        _ua_arch = "aarch64" if _machine in ("aarch64", "arm64") else "x86_64"
         profile.setHttpUserAgent(
-            "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 "
+            f"Mozilla/5.0 (X11; Linux {_ua_arch}) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
         )
         log.info("created persistent profile at %s", self.profile_path)

@@ -219,6 +219,21 @@ def test_player_action_miss_is_recorded_not_classified():
     assert diagnostics.failure_code is None
 
 
+def test_player_action_success_records_strategy():
+    diagnostics = PlaybackDiagnostics()
+    diagnostics.record_player_action("next", "geom:512:Next")
+    assert [e.kind for e in diagnostics.events] == ["player_action"]
+    assert diagnostics.events[0].details == {"action": "next", "strategy": "geom:512:Next"}
+    # dispatch observability is not a failure classification either
+    assert diagnostics.failure_code is None
+
+
+def test_player_action_empty_outcome_is_a_miss():
+    diagnostics = PlaybackDiagnostics()
+    diagnostics.record_player_action("play", "")
+    assert [e.kind for e in diagnostics.events] == ["player_action_missed"]
+
+
 def test_record_media_error_classifies_decode_failure():
     diagnostics = PlaybackDiagnostics()
     diagnostics.record_media_error("media decoder failure")

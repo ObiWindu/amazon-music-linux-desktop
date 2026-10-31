@@ -95,7 +95,7 @@ def test_monitor_payload_propagates_to_state_and_pipeline(window):
 
 
 def test_invalid_monitor_payload_is_ignored(window):
-    window.monitor.handle_event("play")
+    window.monitor.handle_event("playing")
     window._on_monitor_state("")
     window._on_monitor_state("not-json{")
     window._on_monitor_state(None)
@@ -109,3 +109,59 @@ def test_player_action_miss_is_observable_without_false_success(window):
     )
     # a missed action never claims playback state
     assert window.monitor.state is PlaybackState.IDLE
+
+
+def test_player_action_success_strategy_is_recorded(window):
+    window._on_action_result("next", "geom:512:Next")
+    matches = [
+        e for e in window.playback_diagnostics.events if e.kind == "player_action"
+    ]
+    assert len(matches) == 1
+    assert matches[0].details == {"action": "next", "strategy": "geom:512:Next"}
+    # dispatch observability never claims playback state either
+    assert window.monitor.state is PlaybackState.IDLE
+
+
+def test_decoding_verified_only_with_duration_evidence(window):
+    window.monitor.handle_event("playing", position=4.0, duration=200.0)
+    window._on_playback_state_changed(PlaybackState.PLAYING)
+    summary = window.playback_diagnostics.pipeline.summary()
+    assert summary["media_decoding_started"] == "VERIFIED"
+    assert summary["audio_output_started"] == "VERIFIED"
+
+
+def test_playing_without_duration_marks_nothing(window):
+    window.monitor.handle_event("playing")  # no position/duration evidence
+    window._on_playback_state_changed(PlaybackState.PLAYING)
+    summary = window.playback_diagnostics.pipeline.summary()
+    assert summary["media_decoding_started"] == "UNKNOWN"
+    assert summary["audio_output_started"] == "UNKNOWN"
+
+
+def test_apply_player_seek_runs_page_js_and_emits_seeked():
+    from types import SimpleNamespace
+
+    from amazon_music_desktop.main_window import MainWindow
+
+    calls: dict = {}
+    page = SimpleNamespace(runJavaScript=lambda js, *a: calls.setdefault("js", js))
+    view = SimpleNamespace(page=lambda: page)
+    mpris = SimpleNamespace(emit_seeked=lambda seconds: calls.setdefault("seeked", seconds))
+    self = SimpleNamespace(_last_dur=200.0, view=view, mpris=mpris)
+    MainWindow._apply_player_seek(self, 0.5)
+    assert "currentTime" in calls["js"]
+    assert calls["seeked"] == pytest.approx(100.0)
+
+
+def test_apply_player_seek_ignored_without_duration():
+    from types import SimpleNamespace
+
+    from amazon_music_desktop.main_window import MainWindow
+
+    calls: dict = {}
+    page = SimpleNamespace(runJavaScript=lambda js, *a: calls.setdefault("js", js))
+    view = SimpleNamespace(page=lambda: page)
+    mpris = SimpleNamespace(emit_seeked=lambda seconds: calls.setdefault("seeked", seconds))
+    self = SimpleNamespace(_last_dur=0.0, view=view, mpris=mpris)
+    MainWindow._apply_player_seek(self, 0.5)
+    assert calls == {}

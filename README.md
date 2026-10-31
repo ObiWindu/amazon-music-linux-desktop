@@ -214,6 +214,7 @@ See `docs/TROUBLESHOOTING.md`. Common issues:
 - `docs/ARCHITECTURE.md`
 - `docs/SECURITY.md`
 - `docs/DRM_COMPATIBILITY.md`
+- `docs/LICENSE_VERIFICATION_RUNBOOK.md`
 - `docs/TESTING.md`
 - `docs/INSTALLATION.md`
 - `docs/TROUBLESHOOTING.md`

@@ -299,7 +299,21 @@ class PlaybackMonitor:
         elif name == "canplay":
             if self._state in (PlaybackState.LOADING, PlaybackState.BUFFERING, PlaybackState.IDLE):
                 self._state = PlaybackState.BUFFERING
-        elif name in ("play",) or name in ("playing",):
+        elif name == "play":
+            # A 'play' event only means playback was requested (e.g. the
+            # user clicked Play or play() was called) — it is not evidence
+            # that audio is being produced. Report BUFFERING until 'playing'
+            # or position progression confirms actual output.
+            if self._state in (
+                PlaybackState.IDLE,
+                PlaybackState.PAUSED,
+                PlaybackState.ENDED,
+                PlaybackState.ERROR,
+                PlaybackState.STALLED,
+                PlaybackState.LOADING,
+            ):
+                self._state = PlaybackState.BUFFERING
+        elif name == "playing":
             self._state = PlaybackState.PLAYING
         elif name in ("waiting", "stalled"):
             if name == "stalled":

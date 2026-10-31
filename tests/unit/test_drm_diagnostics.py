@@ -59,7 +59,8 @@ def test_configure_widevine_sets_env(tmp_path, monkeypatch):
 
     import amazon_music_desktop.browser.drm_diagnostics as d
     cdm = tmp_path / "libwidevinecdm.so"
-    cdm.write_bytes(b"x" * 64)
+    host = d._host_elf_arch() or "aarch64"
+    cdm.write_bytes(_elf_bytes(183 if host == "aarch64" else 62) + b"\x00" * 64)
     monkeypatch.setattr(d, "CDM_PATH", cdm)
     monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "WidevineCdm")
     monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
@@ -77,13 +78,13 @@ def test_find_usable_cdm_prefers_newest_user_component(tmp_path, monkeypatch):
     home = tmp_path / "home"
     old = tmp_path / "system" / "libwidevinecdm.so"
     old.parent.mkdir(parents=True)
-    old.write_bytes(b"old")
+    old.write_bytes(_elf_bytes(183) + b"\x00" * 16)
     (old.parent / "manifest.json").write_text(json.dumps({"version": "4.10.2662.3"}))
 
     version_dir = home / ".config" / "Codex" / "WidevineCdm" / "4.10.3112.0"
     new = version_dir / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
     new.parent.mkdir(parents=True)
-    new.write_bytes(b"new")
+    new.write_bytes(_elf_bytes(183) + b"\x00" * 16)
     (version_dir / "manifest.json").write_text(json.dumps({"version": "4.10.3112.0"}))
 
     monkeypatch.setattr(d, "CDM_PATH", old)
@@ -100,7 +101,8 @@ def test_find_usable_cdm_honors_explicit_flag(tmp_path, monkeypatch):
     import amazon_music_desktop.browser.drm_diagnostics as d
 
     cdm = tmp_path / "libwidevinecdm.so"
-    cdm.write_bytes(b"x" * 64)
+    host = d._host_elf_arch() or "aarch64"
+    cdm.write_bytes(_elf_bytes(183 if host == "aarch64" else 62) + b"\x00" * 64)
     monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", f"--widevine-cdm-path={cdm}")
     monkeypatch.setattr(d, "CDM_PATH", tmp_path / "nope.so")
     monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "WidevineCdm")
@@ -118,7 +120,7 @@ def test_find_usable_cdm_in_bundled_rpm_dir(tmp_path, monkeypatch):
     bundled = tmp_path / "usr" / "lib64" / "amazon-music-desktop" / "WidevineCdm"
     cdm = bundled / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
     cdm.parent.mkdir(parents=True)
-    cdm.write_bytes(b"bundled")
+    cdm.write_bytes(_elf_bytes(183) + b"\x00" * 16)
     (bundled / "manifest.json").write_text(json.dumps({"version": "4.10.3112.0"}))
 
     monkeypatch.setattr(d, "CDM_PATH", tmp_path / "nope.so")
@@ -139,13 +141,13 @@ def test_ensure_widevine_user_dir_updates_old_system_link(tmp_path, monkeypatch)
     home = tmp_path / "home"
     old = tmp_path / "system" / "libwidevinecdm.so"
     old.parent.mkdir(parents=True)
-    old.write_bytes(b"old")
+    old.write_bytes(_elf_bytes(183) + b"\x00" * 16)
     (old.parent / "manifest.json").write_text(json.dumps({"version": "4.10.2662.3"}))
 
     version_dir = home / ".config" / "Codex" / "WidevineCdm" / "4.10.3112.0"
     new = version_dir / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
     new.parent.mkdir(parents=True)
-    new.write_bytes(b"new")
+    new.write_bytes(_elf_bytes(183) + b"\x00" * 16)
     (version_dir / "manifest.json").write_text(json.dumps({"version": "4.10.3112.0"}))
 
     target = home / ".config" / "chromium" / "WidevineCdm"
@@ -162,7 +164,13 @@ def test_ensure_widevine_user_dir_updates_old_system_link(tmp_path, monkeypatch)
 
     d.ensure_widevine_user_dir()
 
-    assert old_link.resolve() == new.resolve()
+    # The stale non-native (linux_x64-on-ARM64) link is removed rather than
+    # refreshed — writing the ARM64 binary under an x64 path would be a fake
+    # architecture mapping. The native linux_arm64 link points at the newest
+    # CDM instead.
+    assert not old_link.exists() or not old_link.is_symlink()
+    native_link = target / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
+    assert native_link.resolve() == new.resolve()
     manifest = json.loads((target / "manifest.json").read_text())
     assert manifest["version"] == "4.10.3112.0"
     assert any(p.get("arch") == "arm64" for p in manifest["platforms"])
@@ -177,13 +185,13 @@ def test_ensure_widevine_user_dir_updates_system_widevinecdm_link(tmp_path, monk
     system_dir = tmp_path / "system" / "WidevineCdm"
     old = system_dir / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
     old.parent.mkdir(parents=True)
-    old.write_bytes(b"old")
+    old.write_bytes(_elf_bytes(183) + b"\x00" * 16)
     (system_dir / "manifest.json").write_text(json.dumps({"version": "4.10.2662.3"}))
 
     version_dir = home / ".config" / "Codex" / "WidevineCdm" / "4.10.3112.0"
     new = version_dir / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
     new.parent.mkdir(parents=True)
-    new.write_bytes(b"new")
+    new.write_bytes(_elf_bytes(183) + b"\x00" * 16)
     (version_dir / "manifest.json").write_text(json.dumps({"version": "4.10.3112.0"}))
 
     target = home / ".config" / "chromium" / "WidevineCdm"
@@ -214,7 +222,7 @@ def test_ensure_widevine_user_dir_keeps_custom_link(tmp_path, monkeypatch):
     version_dir = home / ".config" / "Codex" / "WidevineCdm" / "4.10.3112.0"
     new = version_dir / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
     new.parent.mkdir(parents=True)
-    new.write_bytes(b"new")
+    new.write_bytes(_elf_bytes(183) + b"\x00" * 16)
     (version_dir / "manifest.json").write_text(json.dumps({"version": "4.10.3112.0"}))
 
     custom = tmp_path / "custom" / "libwidevinecdm.so"
@@ -411,3 +419,204 @@ def test_cdm_version_comparison_without_any_cdm(tmp_path, monkeypatch):
     assert comparison["selected_cdm"]["path"] is None
     assert comparison["flag_passed"] is None
     assert comparison["candidates"] == []
+
+
+def test_cdm_install_status_ready_not_initialized(tmp_path, monkeypatch):
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    cdm = _make_cdm(tmp_path / "libwidevinecdm.so", "4.10.3112.0")
+    monkeypatch.setattr(d.platform, "machine", lambda: "aarch64")
+    # Filesystem validation passes, but this must never claim the CDM is
+    # initialized — only the live MediaKeySession probe proves that.
+    assert d.cdm_install_status(cdm) == "READY"
+    assert d.cdm_install_status(tmp_path / "missing.so") == "NOT_INSTALLED"
+    assert d.cdm_install_status(None) == "NOT_INSTALLED"
+
+
+def test_cdm_inventory_skips_zero_size_placeholder(tmp_path, monkeypatch):
+    d = _isolate_cdm_roots(tmp_path, monkeypatch)
+    real = _make_cdm(tmp_path / "system" / "libwidevinecdm.so", "4.10.2662.3")
+    stub = tmp_path / "system" / "WidevineCdm" / "_platform_specific" / "linux_x64" / "libwidevinecdm.so"
+    stub.parent.mkdir(parents=True, exist_ok=True)
+    stub.write_bytes(b"")  # distro placeholder, not a loadable CDM
+    monkeypatch.setattr(d, "CDM_PATH", real)
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "system" / "WidevineCdm")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+
+    inventory = d.cdm_inventory()
+    assert all(e["path"] != str(stub) for e in inventory)
+    assert any(e["path"] == str(real) for e in inventory)
+
+
+def test_native_platform_dir_matches_host(monkeypatch):
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    monkeypatch.setattr(d.platform, "machine", lambda: "aarch64")
+    assert d._native_platform_dir() == "linux_arm64"
+    monkeypatch.setattr(d.platform, "machine", lambda: "x86_64")
+    assert d._native_platform_dir() == "linux_x64"
+
+
+def test_ensure_widevine_user_dir_writes_native_only(tmp_path, monkeypatch):
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    home = tmp_path / "home"
+    version_dir = home / ".config" / "Codex" / "WidevineCdm" / "4.10.3112.0"
+    new = version_dir / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
+    new.parent.mkdir(parents=True)
+    new.write_bytes(_elf_bytes(183) + b"\x00" * 16)
+    (version_dir / "manifest.json").write_text(json.dumps({"version": "4.10.3112.0"}))
+
+    monkeypatch.setattr(d, "CDM_PATH", tmp_path / "system" / "nope.so")
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "system" / "WidevineCdm")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    monkeypatch.setattr(d.platform, "machine", lambda: "aarch64")
+
+    d.ensure_widevine_user_dir()
+
+    for base in ("chromium", "google-chrome"):
+        target = home / ".config" / base / "WidevineCdm"
+        assert (target / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so").is_symlink()
+        # never write the host binary under the foreign arch path
+        assert not (target / "_platform_specific" / "linux_x64" / "libwidevinecdm.so").exists()
+
+
+def _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64"):
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    monkeypatch.setattr(d.platform, "machine", lambda: machine)
+    monkeypatch.setattr(d, "CDM_PATH", tmp_path / "none.so")
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "widevine")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    return d
+
+
+def test_explicit_cdm_wrong_arch_is_rejected(tmp_path, monkeypatch):
+    d = _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64")
+    wrong = tmp_path / "wrong.so"
+    wrong.write_bytes(_elf_bytes(62) + b"\x00" * 16)  # x86_64 on an ARM64 host
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", f"--widevine-cdm-path={wrong}")
+    assert d.find_usable_cdm() is None
+
+
+def test_explicit_cdm_non_elf_is_rejected(tmp_path, monkeypatch):
+    d = _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64")
+    fake = tmp_path / "fake.so"
+    fake.write_bytes(b"not a library" * 8)
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", f"--widevine-cdm-path={fake}")
+    assert d.find_usable_cdm() is None
+
+
+def test_explicit_cdm_empty_file_is_rejected(tmp_path, monkeypatch):
+    d = _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64")
+    empty = tmp_path / "empty.so"
+    empty.write_bytes(b"")
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", f"--widevine-cdm-path={empty}")
+    assert d.find_usable_cdm() is None
+
+
+def test_discovery_rejects_malformed_binaries(tmp_path, monkeypatch):
+    d = _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64")
+    bad = tmp_path / "widevine" / "libwidevinecdm.so"
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(b"definitely not an ELF library")
+    (tmp_path / "widevine" / "manifest.json").write_text('{"version": "9.9.9.9"}')
+    monkeypatch.setattr(d, "CDM_PATH", bad)
+    # malformed file present but unusable: nothing is selected
+    assert d.find_usable_cdm() is None
+    assert d.check_library_presence(bad).ok is False
+
+
+def test_check_library_presence_rejects_empty_file(tmp_path):
+    from amazon_music_desktop.browser.drm_diagnostics import check_library_presence
+
+    empty = tmp_path / "libwidevinecdm.so"
+    empty.write_bytes(b"")
+    result = check_library_presence(empty)
+    assert result.ok is False
+    assert "empty" in (result.error or "").lower()
+
+
+def _write_maps(proc_root, pid, lines):
+    proc_dir = proc_root / str(pid)
+    proc_dir.mkdir(parents=True)
+    (proc_dir / "maps").write_text("\n".join(lines) + "\n")
+
+
+def test_loaded_cdm_paths_finds_mapped_cdm(tmp_path):
+    from amazon_music_desktop.browser.drm_diagnostics import loaded_cdm_paths, observed_loaded_cdm
+
+    proc = tmp_path / "proc"
+    _write_maps(
+        proc,
+        1234,
+        [
+            "7f000000-7f100000 r--p 00000000 00:01 999 /usr/lib64/libfoo.so",
+            "7f200000-7f300000 r-xp 00000000 00:01 1000 /opt/cdm/_platform_specific/linux_arm64/libwidevinecdm.so",
+        ],
+    )
+    _write_maps(proc, 5678, ["7f000000-7f100000 r--p 00000000 00:01 999 /usr/lib64/libbar.so"])
+    found = loaded_cdm_paths(proc)
+    assert found == [
+        {"pid": 1234, "path": "/opt/cdm/_platform_specific/linux_arm64/libwidevinecdm.so"}
+    ]
+    assert observed_loaded_cdm(proc) == [
+        "/opt/cdm/_platform_specific/linux_arm64/libwidevinecdm.so"
+    ]
+
+
+def test_loaded_cdm_paths_empty_when_absent(tmp_path):
+    from amazon_music_desktop.browser.drm_diagnostics import loaded_cdm_paths, observed_loaded_cdm
+
+    assert loaded_cdm_paths(tmp_path / "no-such-proc") == []
+    assert observed_loaded_cdm(tmp_path / "no-such-proc") == []
+    proc = tmp_path / "proc"
+    _write_maps(proc, 42, ["7f000000-7f100000 r--p 00000000 00:01 1 /usr/lib/libc.so"])
+    assert loaded_cdm_paths(proc) == []
+
+
+def test_loaded_cdm_paths_strips_deleted_marker(tmp_path):
+    from amazon_music_desktop.browser.drm_diagnostics import observed_loaded_cdm
+
+    proc = tmp_path / "proc"
+    _write_maps(
+        proc,
+        99,
+        ["7f200000-7f300000 r-xp 00000000 00:01 1000 /opt/old/libwidevinecdm.so (deleted)"],
+    )
+    assert observed_loaded_cdm(proc) == ["/opt/old/libwidevinecdm.so"]
+
+
+def test_loaded_cdm_paths_tree_scope_limits_to_own_processes(tmp_path, monkeypatch):
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    proc = tmp_path / "proc"
+    for pid, ppid in ((100, 1), (101, 100), (200, 1)):
+        pdir = proc / str(pid)
+        pdir.mkdir(parents=True)
+        (pdir / "stat").write_text(f"{pid} (fake) S {ppid} 0 0 0 0 0 0 0 0 0 0 0 0 0 0")
+        if pid == 100:
+            maps_line = "7f000000-7f100000 r--p 00000000 00:01 1 /usr/lib/libc.so"
+        else:
+            maps_line = (
+                "7f200000-7f300000 r-xp 00000000 00:01 1000 "
+                + ("/opt/app/libwidevinecdm.so" if pid == 101 else "/opt/other/libwidevinecdm.so")
+            )
+        (pdir / "maps").write_text(maps_line + "\n")
+    monkeypatch.setattr(d.os, "getpid", lambda: 100)
+    assert d.observed_loaded_cdm(proc, scope="tree") == ["/opt/app/libwidevinecdm.so"]
+    assert sorted(d.observed_loaded_cdm(proc, scope="all")) == [
+        "/opt/app/libwidevinecdm.so",
+        "/opt/other/libwidevinecdm.so",
+    ]
+
+
+def test_loaded_cdm_paths_rejects_unknown_scope(tmp_path):
+    import pytest
+
+    from amazon_music_desktop.browser.drm_diagnostics import loaded_cdm_paths
+
+    with pytest.raises(ValueError):
+        loaded_cdm_paths(tmp_path, scope="everything")

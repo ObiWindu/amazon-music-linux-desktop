@@ -25,6 +25,7 @@ from ..browser.drm_diagnostics import (
     detect_freeworld,
     find_usable_cdm,
     format_stage,
+    observed_loaded_cdm,
     parse_cdm_session_result,
     run_stage_a,
     validate_cdm_manifest,
@@ -231,6 +232,20 @@ class DiagnosticsDialog(QDialog):
         if not comparison["candidates"]:
             lines.append("- no CDM binaries discovered")
         lines.append(f"Qt WebEngine CDM load: {comparison['qt_webengine_loaded']}")
+        observed = observed_loaded_cdm(scope="tree")
+        if observed:
+            for path in observed:
+                marker = (
+                    " (matches selected CDM)"
+                    if selected_cdm is not None and path == str(selected_cdm)
+                    else ""
+                )
+                lines.append(f"Observed mapped CDM (live process): {path}{marker}")
+        else:
+            lines.append(
+                "Observed mapped CDM (live process): none visible — "
+                "run 'Test CDM session' first, then re-run diagnostics"
+            )
         # playback state + pipeline (remediation spec 5)
         monitor = getattr(self.parent(), "monitor", None)
         if monitor is not None:

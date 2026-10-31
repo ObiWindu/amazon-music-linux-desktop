@@ -381,6 +381,11 @@ class MainWindow(QMainWindow):
             # observable, and never a false success: the UI state comes from
             # the page probe, not from the action
             self.playback_diagnostics.record_player_action_missed(action)
+        else:
+            # record which dispatch strategy fired (media toggle, selector,
+            # or geometry fallback); playback state still comes from the
+            # monitor, so this is observability, not a success claim
+            self.playback_diagnostics.record_player_action(action, str(ok))
 
     def _set_player_volume(self, value: int) -> None:
         try:
@@ -399,8 +404,13 @@ class MainWindow(QMainWindow):
         if total <= 0:
             log.debug("seek ignored: no track duration yet")
             return
+        target = float(max(0.0, min(1.0, fraction))) * total
         try:
-            self.view.page().runJavaScript(seek_js(float(max(0.0, min(1.0, fraction))) * total))
+            self.view.page().runJavaScript(seek_js(target))
+            # MPRIS clients resync from the Seeked signal; the monitor's next
+            # probe confirms the actual position.
+            if self.mpris is not None:
+                self.mpris.emit_seeked(target)
         except Exception as exc:
             log.warning("seek failed: %s", exc)
 

@@ -14,26 +14,41 @@
 - Discovery: the app scans the system install, the optional bundled directory,
   `~/.config/chromium`, `~/.config/google-chrome`, and versioned `WidevineCdm`
   directories from Chromium-based applications. It selects the newest readable
-  CDM whose ELF architecture matches the host.
+  CDM whose ELF architecture matches the host. Malformed (non-ELF, empty,
+  unreadable) and architecture-incompatible binaries are rejected — including
+  an explicit `--widevine-cdm-path` pointing at one, which falls back to
+  discovery with a warning instead of handing Chromium an unloadable file.
 - Initialization: the selected library is passed to QtWebEngine as
   `--widevine-cdm-path=<cdm>` via `QTWEBENGINE_CHROMIUM_FLAGS` before engine
-  init. The app also creates or updates the user-level `WidevineCdm`
-  directories so both discovery paths point at the same build.
+  init (wired in `app.main()` ahead of `QApplication`, locked by
+  `tests/unit/test_startup_wiring.py`). The app also creates or updates the
+  user-level `WidevineCdm` directories so both discovery paths point at the
+  same build.
+- Loaded-CDM verification: Qt exposes no API for the CDM it actually loaded,
+  so Diagnostics reports three independent facts side by side — the flag
+  passed to the engine, the selected path/version, and `Observed mapped CDM`,
+  a read-only scan of our own process tree's `/proc/*/maps` for mmapped
+  `libwidevinecdm.so` binaries after first EME use. A mismatch between
+  selected and observed paths means the engine loaded a different build.
 - Diagnostics: **Diagnostics → CDM in use / CDM version** reports the selected
   path and version. **Test CDM session** creates MediaKeys and a
   MediaKeySession to prove the CDM loads (and only that — it is not evidence
-  of playback). CDM install status is classified as NOT_INSTALLED,
-  NOT_DISCOVERABLE, MANIFEST_INVALID, ARCH_INCOMPATIBLE, or LIBRARY_MISSING;
-  INITIALIZED/INIT_FAILED come only from the live session probe.
+  of playback). Filesystem status is classified as NOT_INSTALLED,
+  NOT_DISCOVERABLE, MANIFEST_INVALID, ARCH_INCOMPATIBLE, LIBRARY_MISSING, or
+  READY (filesystem checks passed); INITIALIZED/INIT_FAILED come only from
+  the live session probe, never from the filesystem.
 - Audio codecs: AAC and MP3 decode verified working in stock QtWebEngine
   6.11.2 via `decodeAudioData` (2026-10-29).
 - Amazon playback: the older 4.10.2662.3 build is rejected by Amazon's license
   service with `VMP_VALIDATION_FAILED`. The newer 4.10.3112.0 build is selected
-  automatically when present; protected playback must be verified on a host
-  with an Amazon account, subscription, and audio output.
-- Known limitation: Qt builds may hardcode the `linux_x64` Widevine path; the
-  app therefore maintains both `linux_x64` and `linux_arm64` symlinks in its
-  user-level CDM directories.
+  automatically when present; whether the license server accepts it is tested
+  per `docs/LICENSE_VERIFICATION_RUNBOOK.md` on a host with an Amazon
+  account, subscription, and audio output.
+- Known limitation: only the native platform directory is ever written
+  (`linux_arm64` on ARM64, `linux_x64` on x86_64). The host binary is never
+  placed under the opposite architecture's path. Stale non-native links left
+  by older app versions are removed when they point at managed CDM files;
+  custom user CDMs are left untouched.
 
 ## Compatibility matrix
 

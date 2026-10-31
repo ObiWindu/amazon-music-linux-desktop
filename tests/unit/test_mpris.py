@@ -150,7 +150,7 @@ def test_actions_without_window_do_nothing():
 
 
 def test_playpause_toggle_depends_on_state(window, service):
-    window.monitor.handle_event("play")
+    window.monitor.handle_event("playing")
     service._player_adaptor.PlayPause()
     window.monitor.handle_event("pause")
     service._player_adaptor.PlayPause()
@@ -214,7 +214,7 @@ def test_player_properties(window, service):
 
 def test_playback_status_property_follows_monitor(window, service):
     assert service._player_adaptor.PlaybackStatus == "Stopped"
-    window.monitor.handle_event("play")
+    window.monitor.handle_event("playing")
     assert service._player_adaptor.PlaybackStatus == "Playing"
     window.monitor.handle_event("pause")
     assert service._player_adaptor.PlaybackStatus == "Paused"
@@ -232,7 +232,7 @@ def test_update_playback_before_registration_is_noop(service):
 
 
 def test_advance_track_bumps_trackid_and_metadata(window, service):
-    window.monitor.handle_event("play")
+    window.monitor.handle_event("playing")
     first = service.metadata["mpris:trackid"]
     service.advance_track()
     assert service.metadata["mpris:trackid"] != first

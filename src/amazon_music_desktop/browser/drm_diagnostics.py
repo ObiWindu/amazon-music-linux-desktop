@@ -38,6 +38,22 @@ _PLATFORM_DIRS: dict[str, tuple[str, ...]] = {
     "amd64": ("linux_x64", "linux_arm64"),
 }
 
+# Native platform directory for *writing* user-level CDM links. Discovery may
+# scan the fallback name too (validated by ELF architecture), but we must never
+# write an ARM64 binary to a linux_x64 path or vice versa — that would be a
+# fake architecture mapping (remediation spec 2.1).
+_NATIVE_PLATFORM_DIR: dict[str, str] = {
+    "aarch64": "linux_arm64",
+    "arm64": "linux_arm64",
+    "x86_64": "linux_x64",
+    "amd64": "linux_x64",
+}
+
+
+def _native_platform_dir() -> str:
+    """Return the single Widevine platform dir matching this host."""
+    return _NATIVE_PLATFORM_DIR.get(platform.machine().lower(), "linux_arm64")
+
 # JS probe: goes one step beyond key-system detection by creating MediaKeys
 # and a MediaKeySession, which forces Chromium to instantiate the CDM.
 # Success => CDM loads. Failure here (while key-system detection passes)
@@ -204,17 +220,41 @@ def _candidate_paths() -> list[Path]:
 
 
 def _explicit_cdm() -> Path | None:
-    """Return a CDM explicitly requested via QTWEBENGINE_CHROMIUM_FLAGS."""
+    """Return a CDM explicitly requested via QTWEBENGINE_CHROMIUM_FLAGS.
+
+    The explicit path is held to the same bar as auto-discovered builds:
+    it must exist, be readable, be non-empty, and its ELF architecture must
+    match the host. A malformed or incompatible explicit CDM is rejected
+    (with a warning) so Chromium is never handed a binary it cannot load;
+    discovery then falls back to the newest usable build.
+    """
     flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+    host_arch = _host_elf_arch()
     for token in flags.split():
         if not token.startswith(f"{WIDEVINE_CDM_FLAG}="):
             continue
         candidate = Path(token.split("=", 1)[1])
         try:
-            if candidate.is_file() and os.access(candidate, os.R_OK):
-                return candidate
+            if not (candidate.is_file() and os.access(candidate, os.R_OK)):
+                continue
+            if candidate.stat().st_size <= 0:
+                log.warning("ignoring explicit CDM %s: empty file", candidate)
+                continue
         except OSError:
             continue
+        arch = _elf_arch(candidate)
+        if host_arch and arch in ("aarch64", "x86_64") and arch != host_arch:
+            log.warning(
+                "ignoring explicit CDM %s: architecture mismatch (CDM is %s, host is %s)",
+                candidate,
+                arch,
+                host_arch,
+            )
+            continue
+        if arch in ("not-elf",) or arch.startswith(("error:", "unknown(")):
+            log.warning("ignoring explicit CDM %s: not a loadable library (%s)", candidate, arch)
+            continue
+        return candidate
     return None
 
 
@@ -243,6 +283,16 @@ def find_usable_cdm() -> Path | None:
         except OSError:
             continue
         arch = _elf_arch(candidate)
+        # Reject malformed and incompatible binaries: when the host arch is
+        # known only an exact host-arch ELF is eligible; otherwise any
+        # non-ELF, unreadable, or unknown-machine file is skipped. A text
+        # file or wrong-arch library named libwidevinecdm.so is never
+        # selected or handed to Chromium.
+        if host_arch:
+            if arch != host_arch:
+                continue
+        elif arch in ("not-elf",) or arch.startswith(("error:", "unknown(")):
+            continue
         if host_arch and arch in ("aarch64", "x86_64") and arch != host_arch:
             continue
         version = _manifest_for(candidate).get("version", "")
@@ -320,6 +370,8 @@ def check_library_presence(cdm_path: Path = CDM_PATH) -> StageResult:
         st = cdm_path.stat()
         details["size"] = st.st_size
         details["mode"] = oct(st.st_mode & 0o777)
+        if st.st_size <= 0:
+            return StageResult("A_library_presence", False, details, "CDM file is empty")
     except OSError as exc:
         return StageResult("A_library_presence", False, details, str(exc))
     # ELF arch: validated against the *host* runtime architecture, never a
@@ -418,24 +470,24 @@ def _qt_version() -> str:
 
 
 def _write_user_manifest(target: Path, cdm: Path) -> None:
-    """Copy the selected CDM's manifest and add Linux platform entries."""
+    """Copy the selected CDM's manifest and add the native Linux entry."""
     manifest = dict(_manifest_for(cdm))
     platforms = manifest.setdefault("platforms", [])
-    for platform_dir in _platform_dirs():
-        arch = "arm64" if "arm64" in platform_dir else "x64"
-        if not any(
-            isinstance(entry, dict)
-            and entry.get("os") == "linux"
-            and entry.get("arch") == arch
-            for entry in platforms
-        ):
-            platforms.append(
-                {
-                    "os": "linux",
-                    "arch": arch,
-                    "sub_package_path": f"_platform_specific/{platform_dir}/",
-                }
-            )
+    native = _native_platform_dir()
+    arch = "arm64" if "arm64" in native else "x64"
+    if not any(
+        isinstance(entry, dict)
+        and entry.get("os") == "linux"
+        and entry.get("arch") == arch
+        for entry in platforms
+    ):
+        platforms.append(
+            {
+                "os": "linux",
+                "arch": arch,
+                "sub_package_path": f"_platform_specific/{native}/",
+            }
+        )
     (target / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
 
@@ -459,8 +511,13 @@ def ensure_widevine_user_dir() -> None:
     """Point user-level WidevineCdm dirs at the newest usable CDM.
 
     QtWebEngine and Chromium discover Widevine through these directories.
-    Symlinks that point at a system or bundled CDM are updated so both
-    discovery paths use the same (newer) build. A custom user CDM is left
+    Only the native platform directory (``linux_arm64`` on ARM64,
+    ``linux_x64`` on x86_64) is maintained — writing the host binary under
+    the opposite architecture's path would be a fake mapping and is never
+    done. Stale non-native links created by older app versions that point at
+    a managed system/bundled CDM are removed; custom user CDMs are left
+    untouched. Symlinks that point at a system or bundled CDM are updated so
+    both discovery paths use the same (newer) build. A custom user CDM is left
     untouched.
     """
     cdm = find_usable_cdm()
@@ -470,32 +527,50 @@ def ensure_widevine_user_dir() -> None:
         selected = cdm.resolve()
     except OSError:
         selected = cdm
+    native = _native_platform_dir()
+    fallbacks = [d for d in _platform_dirs() if d != native]
     home = Path.home()
     for base in (home / ".config" / "chromium", home / ".config" / "google-chrome"):
         target = base / "WidevineCdm"
         try:
             target.mkdir(parents=True, exist_ok=True)
+            # Clean up stale non-native links from older app versions that
+            # placed the host binary under the fallback arch path. Only
+            # remove symlinks pointing at managed files (or broken links);
+            # a custom user CDM under the fallback path is left alone.
+            for platform_dir in fallbacks:
+                stale = target / "_platform_specific" / platform_dir / "libwidevinecdm.so"
+                try:
+                    if stale.is_symlink():
+                        try:
+                            current = stale.resolve()
+                        except OSError:
+                            current = None
+                        if current is None or _is_managed_cdm(current):
+                            stale.unlink()
+                            log.info("removed stale non-native CDM link %s", stale)
+                except OSError as exc:
+                    log.debug("could not clean stale cdm link %s: %s", stale, exc)
             changed = False
-            for platform_dir in _platform_dirs():
-                sub = target / "_platform_specific" / platform_dir
-                sub.mkdir(parents=True, exist_ok=True)
-                link = sub / "libwidevinecdm.so"
-                if link.is_symlink():
-                    try:
-                        current = link.resolve()
-                    except OSError:
-                        current = None
-                    # Replace a broken link or one pointing at a managed
-                    # system/bundled CDM; never clobber a custom CDM.
-                    if current != selected and (
-                        current is None or _is_managed_cdm(current) or not link.exists()
-                    ):
-                        link.unlink()
-                        link.symlink_to(cdm)
-                        changed = True
-                elif not link.exists():
+            sub = target / "_platform_specific" / native
+            sub.mkdir(parents=True, exist_ok=True)
+            link = sub / "libwidevinecdm.so"
+            if link.is_symlink():
+                try:
+                    current = link.resolve()
+                except OSError:
+                    current = None
+                # Replace a broken link or one pointing at a managed
+                # system/bundled CDM; never clobber a custom CDM.
+                if current != selected and (
+                    current is None or _is_managed_cdm(current) or not link.exists()
+                ):
+                    link.unlink()
                     link.symlink_to(cdm)
                     changed = True
+            elif not link.exists():
+                link.symlink_to(cdm)
+                changed = True
             if changed or not (target / "manifest.json").exists():
                 _write_user_manifest(target, cdm)
                 log.info("updated user-level WidevineCdm dir %s -> %s", target, cdm)
@@ -546,9 +621,10 @@ def cdm_install_status(cdm: Path | None) -> str:
     """Classify a discovered CDM installation at the filesystem level.
 
     One of NOT_INSTALLED, NOT_DISCOVERABLE, MANIFEST_INVALID,
-    ARCH_INCOMPATIBLE, LIBRARY_MISSING. Initialization results (INIT_FAILED /
-    INITIALIZED) are only observable through the live CDM session probe in
-    the diagnostics dialog and are never inferred here.
+    ARCH_INCOMPATIBLE, LIBRARY_MISSING, or READY (filesystem validation
+    passed). Initialization results (INIT_FAILED / INITIALIZED) are only
+    observable through the live CDM session probe in the diagnostics dialog
+    and are never inferred here.
     """
     if cdm is None:
         return "NOT_INSTALLED"
@@ -570,7 +646,7 @@ def cdm_install_status(cdm: Path | None) -> str:
     manifest = _manifest_for(cdm)
     if not manifest:
         return "MANIFEST_INVALID"
-    return "INITIALIZED"
+    return "READY"
 
 
 def cdm_inventory() -> list[dict[str, Any]]:
@@ -589,6 +665,11 @@ def cdm_inventory() -> list[dict[str, Any]]:
             if not path.is_file() or not os.access(path, os.R_OK):
                 continue
             size = path.stat().st_size
+            # Skip zero-size placeholder files shipped by some distro
+            # packages (e.g. an empty linux_x64 stub on ARM64 systems);
+            # they are not loadable CDMs.
+            if size <= 0:
+                continue
         except OSError:
             continue
         manifest = _manifest_for(path)
@@ -605,6 +686,110 @@ def cdm_inventory() -> list[dict[str, Any]]:
             }
         )
     return entries
+
+
+def _descendant_pids(proc_root: Path, root_pid: int) -> set[int]:
+    """Return root_pid plus all transitive children via /proc ppid links."""
+    children: dict[int, list[int]] = {}
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return {root_pid}
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        try:
+            stat = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
+        try:
+            ppid = int(stat[stat.rfind(")") + 1 :].split()[1])
+        except (IndexError, ValueError):
+            continue
+        children.setdefault(ppid, []).append(pid)
+    seen = {root_pid}
+    queue = [root_pid]
+    while queue:
+        for child in children.get(queue.pop(), []):
+            if child not in seen:
+                seen.add(child)
+                queue.append(child)
+    return seen
+
+
+def loaded_cdm_paths(
+    proc_root: Path | str = "/proc", scope: str = "all"
+) -> list[dict[str, Any]]:
+    """Observe which libwidevinecdm.so binaries live processes have mapped.
+
+    Qt WebEngine exposes no public API for the CDM it actually loaded — the
+    ``--widevine-cdm-path`` flag only states intent, and the EME session
+    probe only proves *a* CDM instantiated. After first EME use, however,
+    Chromium mmaps the loaded CDM into its helper (QtWebEngineProcess)
+    address space, and that mapping is locally observable through
+    ``/proc/<pid>/maps``. Each entry reports the pid and mapped path.
+
+    ``scope="tree"`` limits the scan to this process and its descendants
+    (i.e. our own QtWebEngine helpers — the attribution that matters);
+    ``scope="all"`` scans every visible process. An empty result means no
+    mapping is currently visible (EME not yet used, helper not yet spawned,
+    or maps unreadable) — never evidence of failure.
+
+    This is read-only local introspection: no CDM, license, or page data is
+    touched.
+    """
+    if scope not in ("all", "tree"):
+        raise ValueError(f"unknown scope: {scope!r}")
+    root = Path(proc_root)
+    allowed: set[int] | None = None
+    if scope == "tree":
+        allowed = _descendant_pids(root, os.getpid())
+    found: dict[tuple[int, str], None] = {}
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if allowed is not None and pid not in allowed:
+            continue
+        try:
+            maps = (entry / "maps").read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
+        for line in maps.splitlines():
+            if "libwidevinecdm.so" not in line:
+                continue
+            # maps format: address perms offset dev inode pathname
+            parts = line.split(None, 5)
+            if len(parts) < 6:
+                continue
+            path = parts[5].strip()
+            if path.endswith(" (deleted)"):
+                path = path[: -len(" (deleted)")].strip()
+            if not path.startswith("/"):
+                continue
+            found.setdefault((pid, path))
+            if len(found) >= 50:
+                break
+        if len(found) >= 50:
+            break
+    return [{"pid": pid, "path": path} for pid, path in sorted(found)]
+
+
+def observed_loaded_cdm(
+    proc_root: Path | str = "/proc", scope: str = "all"
+) -> list[str]:
+    """Sorted unique CDM paths currently mapped by live processes."""
+    seen: list[str] = []
+    for entry in loaded_cdm_paths(proc_root, scope=scope):
+        path = entry["path"]
+        if path not in seen:
+            seen.append(path)
+    return seen
 
 
 def cdm_version_comparison() -> dict[str, Any]:
@@ -628,7 +813,10 @@ def cdm_version_comparison() -> dict[str, Any]:
         },
         "flag_passed": build_widevine_flags(selected, "") if selected else None,
         "candidates": cdm_inventory(),
-        "qt_webengine_loaded": "not directly observable; use the live CDM session probe",
+        "qt_webengine_loaded": (
+            "not directly observable through Qt APIs; use the live CDM session "
+            "probe plus the 'Observed mapped CDM' process-tree scan in diagnostics"
+        ),
     }
 
 

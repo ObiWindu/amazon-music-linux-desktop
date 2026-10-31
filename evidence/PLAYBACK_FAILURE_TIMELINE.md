@@ -59,6 +59,9 @@ system build).
 
 - DETECTED: CDM discovery and architecture validation (system 4.10.2662.3,
   component 4.10.3112.0).
+- READY: filesystem validation passed for the selected CDM (manifest valid,
+  host-matching ELF arch). The live CDM session probe is the only evidence
+  for initialization.
 - INITIALIZED: CDM 4.10.3112.0 (MediaKeySession creation verified live).
 - LICENSE ACCEPTED: never observed on any build so far.
 - PLAYBACK VERIFIED: never observed.

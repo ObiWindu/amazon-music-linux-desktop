@@ -288,6 +288,24 @@ class PlaybackDiagnostics:
             {"action": action},
         )
 
+    def record_player_action(self, action: str, outcome: str) -> DiagnosticEvent:
+        """Record how a transport action was dispatched on the page.
+
+        ``outcome`` is the verbatim strategy token returned by the page
+        snippet (``play``/``pause`` for the media-element toggle,
+        ``sel:<label>`` for a selector click, ``geom:<x>:<label>`` for the
+        geometry fallback, ``seek``/``vol:..`` for seek/volume). An empty
+        outcome is recorded as a miss. Success here means the click was
+        *dispatched* — playback state still comes only from the monitor.
+        """
+        if not outcome:
+            return self.record_player_action_missed(action)
+        return self._record(
+            "player_action",
+            f"transport action dispatched on the page: {action} ({outcome[:60]})",
+            {"action": action, "strategy": outcome[:80]},
+        )
+
     # --- pipeline stage evidence -----------------------------------------
 
     def note_page_loaded(self, url: str | None = None, ok: bool = True) -> None:
