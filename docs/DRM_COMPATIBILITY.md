@@ -39,13 +39,19 @@
   reaches the helper cmdline, and the loader always tries the hardcoded
   distro stub
   `/usr/lib64/chromium-browser/WidevineCdm/_platform_specific/linux_x64/libwidevinecdm.so`.
-  That file is currently a 0-byte placeholder, so EME fails at
-  `createMediaKeys()` (`CreateCdmFunc not available`) no matter which CDM
-  the app selects. Repro without an Amazon account:
+  That file is currently a 0-byte placeholder. Loading works through the
+  engine's user-level lookup names instead: `ensure_widevine_user_dir()`
+  maintains the validated host-arch CDM at
+  `~/.config/chromium` and `~/.config/google-chrome` `WidevineCdm/
+  _platform_specific/linux_x64/` (verified 2026-11-03 — a headless EME
+  probe with no flag at all creates MediaKeys + sessions with the 4.10.3112.0
+  ARM64 build, and `/proc` maps confirm our helper processes hold exactly
+  that binary). Repro without an Amazon account:
   `QT_QPA_PLATFORM=offscreen python3 scripts/probe-cdm-session.py`.
-  Diagnostics shows this path under `Engine default CDM path`; the app never
-  writes there. Until the engine loads a real CDM, the failure sits one
-  stage *before* the license server and VMP cannot be re-tested.
+  Diagnostics shows the distro file under `Engine default CDM path` (the app
+  never writes there) and the verdict confirms selection == loaded. With a
+  CDM loading, the failure moves back to the license server, where VMP can
+  be re-tested per the runbook.
 - Loaded-CDM verification: Qt exposes no API for the CDM it actually loaded,
   so Diagnostics reports three independent facts side by side — the flag
   passed to the engine, the selected path/version, and `Observed mapped CDM`,
@@ -70,10 +76,12 @@
   automatically when present; whether the license server accepts it is tested
   per `docs/LICENSE_VERIFICATION_RUNBOOK.md` on a host with an Amazon
   account, subscription, and audio output.
-- Known limitation: only the native platform directory is ever written
-  (`linux_arm64` on ARM64, `linux_x64` on x86_64). The host binary is never
-  placed under the opposite architecture's path. Stale non-native links left
-  by older app versions are removed when they point at managed CDM files;
+- Lookup-name policy: every engine lookup name under the user directories
+  (`linux_arm64` and `linux_x64`) carries the same validated host-arch
+  binary. The directory name is a lookup key the engine hardcodes — it is
+  not an architecture attestation and is never treated as one. Arch
+  compatibility is enforced on the binary itself (ELF check at selection,
+  dlopen at load); a wrong-arch binary is never placed anywhere, and
   custom user CDMs are left untouched.
 
 ## Compatibility matrix
@@ -84,7 +92,7 @@ claims.
 
 | Environment | Qt WebEngine | Widevine CDM | Playback |
 |---|---|---|---|
-| Fedora Asahi Remix 44 aarch64 | 6.11.2 (Chromium 140) | 4.10.3112.0 arm64 (component) preferred; 4.10.2662.3 arm64 rejected by license server (VMP_VALIDATION_FAILED) | engine ignores --widevine-cdm-path, tries 0-byte distro stub → createMediaKeys fails (2026-10-31); license stage unreachable; protected playback unverified |
+| Fedora Asahi Remix 44 aarch64 | 6.11.2 (Chromium 140) | 4.10.3112.0 arm64 (component) preferred; 4.10.2662.3 arm64 rejected by license server (VMP_VALIDATION_FAILED, 2026-10-29) | CDM loads via user-level engine lookup path (MediaKeySession OK headless 2026-11-03, mapped binary verified); license acceptance + audible playback unverified (need account) |
 | Fedora x86_64 | not tested | not tested | not tested |
 | Fedora aarch64 (non-Asahi) | not tested | not tested | not tested |
 | Debian x86_64 | not tested | not tested | not tested |

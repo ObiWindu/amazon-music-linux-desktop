@@ -25,7 +25,7 @@ A native desktop application for Amazon Music on Linux, built with Python 3, PyS
 | Level | Status |
 |---|---|
 | CDM detected | Yes — system (4.10.2662.3) and component-updated (4.10.3112.0) ARM64 builds; architecture-validated |
-| CDM initialized | **No (as of 2026-10-31)** — Fedora's qt6-qtwebengine-6.11.2 ignores `--widevine-cdm-path` and attempts only a 0-byte distro stub, so `createMediaKeys()` fails with `CreateCdmFunc not available` for every CDM. A 4.10.3112.0 session success recorded 2026-10-29 does not reproduce today |
+| CDM initialized | **Yes (as of 2026-11-03)** — headless EME probe creates MediaKeys + MediaKeySession with the 4.10.3112.0 ARM64 build loaded through the engine's user-level lookup path (`/proc` maps confirm our helpers hold exactly that binary); the distro stub path remains a 0-byte placeholder and the flag is still ignored on this build |
 | License accepted | No — 4.10.2662.3 was rejected by Amazon (`VMP_VALIDATION_FAILED`, HTTP 400) on 2026-10-29 when a CDM loaded; currently no license request can be sent at all |
 | Playback verified | No — protected playback has not been successfully tested on any configuration yet |
 

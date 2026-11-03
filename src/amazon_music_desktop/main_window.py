@@ -553,10 +553,13 @@ class MainWindow(QMainWindow):
             diagnostics.classify("playback stopped progressing")
             self.status_label.setText("Playback stalled")
         elif playing and self.monitor.duration > 0:
-            # The page fired 'playing': audio is actually being produced,
-            # which is direct evidence for the two final pipeline stages.
+            # The page fired 'playing' with a known duration: the decoder is
+            # running, which verifies media_decoding_started. audio_output is
+            # verified only once the position actually advances — a stream
+            # stuck at 0:00 decodes nothing audible.
             diagnostics.note_media_decoding()
-            diagnostics.note_audio_output()
+            if self.monitor.position > 0:
+                diagnostics.note_audio_output()
 
     def _on_render_terminated(self, status, code):
         self.playback_diagnostics.record_renderer_termination(status, code)

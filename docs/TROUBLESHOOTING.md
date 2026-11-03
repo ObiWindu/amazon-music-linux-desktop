@@ -2,14 +2,18 @@
 
 - `CreateCdmFunc not available` from **Test CDM session** (or the headless
   probe): the engine never loaded any CDM. On Fedora's qt6-qtwebengine
-  6.11.2 the `--widevine-cdm-path` switch is ignored — the engine always
-  attempts its hardcoded distro path (check Diagnostics → Engine default CDM
-  path; currently a 0-byte placeholder). Selecting a newer CDM cannot help
-  until a real library is loadable there. No app setting fixes this; a
-  system administrator may place the installed vendor CDM at the attempted
-  path (back it up first; package updates may revert it) and re-run
-  `QT_QPA_PLATFORM=offscreen python3 scripts/probe-cdm-session.py` to
-  confirm `[C_cdm_session] OK`. The app itself never writes outside the
+  6.11.2 the `--widevine-cdm-path` switch is ignored — the engine only
+  attempts its hardcoded lookup names (check Diagnostics → Engine default
+  CDM path; currently a 0-byte placeholder). The app works around this by
+  maintaining the validated host-arch CDM at the engine's user-level
+  lookup path (`~/.config/chromium|google-chrome/WidevineCdm/
+  _platform_specific/linux_x64/`), which the headless probe verifies with
+  `[C_cdm_session] OK`. If the probe still fails here, those user links are
+  missing or broken — re-run the app (it repairs them at startup) and
+  re-run `QT_QPA_PLATFORM=offscreen python3 scripts/probe-cdm-session.py`.
+  Only if loading from user paths is impossible would a system
+  administrator need to touch the distro path (back it up first; package
+  updates may revert it). The app itself never writes outside the
   user-level directories.
 - Missing WebEngine bindings: install qt6-qtwebengine and python3-pyside6.
 - Missing CDM: install widevine-installer; check /var/lib/widevine.

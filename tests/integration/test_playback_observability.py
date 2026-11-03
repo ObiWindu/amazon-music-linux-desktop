@@ -138,6 +138,16 @@ def test_playing_without_duration_marks_nothing(window):
     assert summary["audio_output_started"] == "UNKNOWN"
 
 
+def test_audio_output_requires_advancing_position(window):
+    # Decoder runs (duration known) but the stream is stuck at 0:00: decoding
+    # is verified, audible output is not.
+    window.monitor.handle_event("playing", position=0.0, duration=200.0)
+    window._on_playback_state_changed(PlaybackState.PLAYING)
+    summary = window.playback_diagnostics.pipeline.summary()
+    assert summary["media_decoding_started"] == "VERIFIED"
+    assert summary["audio_output_started"] == "UNKNOWN"
+
+
 def test_apply_player_seek_runs_page_js_and_emits_seeked():
     from types import SimpleNamespace
 
@@ -219,9 +229,11 @@ def test_instrumentation_runs_in_iframe_context(window, qtbot):
     assert payload.get("position") == 0
 
 
-def test_diagnostics_verdict_unknown_without_mapped_cdm(window):
+def test_diagnostics_verdict_unknown_without_mapped_cdm(window, monkeypatch):
+    import amazon_music_desktop.ui.diagnostics_dialog as dlg
     from amazon_music_desktop.ui.diagnostics_dialog import DiagnosticsDialog
 
+    monkeypatch.setattr(dlg, "observed_loaded_cdm", lambda scope="tree": [])
     dialog = DiagnosticsDialog(window, playback_diagnostics=window.playback_diagnostics)
     text = dialog.text.toPlainText()
     # the three values are labeled as what they are — selection is never
@@ -230,6 +242,23 @@ def test_diagnostics_verdict_unknown_without_mapped_cdm(window):
     assert "Engine default CDM path" in text
     assert "Observed mapped CDM" in text
     assert "Selection vs loaded verdict" in text
-    # no CDM is mapped into test processes: verdict must be UNKNOWN, never MATCH
+    # no CDM is mapped: verdict must be UNKNOWN, never MATCH
     assert "verdict: UNKNOWN" in text
     assert "verdict: MATCH" not in text
+
+
+def test_diagnostics_verdict_match_and_mismatch(window, monkeypatch):
+    import amazon_music_desktop.ui.diagnostics_dialog as dlg
+    from amazon_music_desktop.browser.drm_diagnostics import find_usable_cdm
+    from amazon_music_desktop.ui.diagnostics_dialog import DiagnosticsDialog
+
+    selected = find_usable_cdm()
+    assert selected is not None
+    monkeypatch.setattr(dlg, "observed_loaded_cdm", lambda scope="tree": [str(selected)])
+    text = DiagnosticsDialog(window, playback_diagnostics=window.playback_diagnostics).text.toPlainText()
+    assert "verdict: MATCH" in text
+
+    monkeypatch.setattr(dlg, "observed_loaded_cdm", lambda scope="tree": ["/other/libwidevinecdm.so"])
+    text = DiagnosticsDialog(window, playback_diagnostics=window.playback_diagnostics).text.toPlainText()
+    assert "verdict: MISMATCH" in text
+    assert "/other/libwidevinecdm.so" in text

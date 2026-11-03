@@ -2,12 +2,14 @@
 
 - Stage A (library presence): PASS (aarch64, deps resolved; system CDM 4.10.2662.3)
 - Stage B (EME/Widevine key system): PASS (com.widevine.alpha)
-- Stage C (CDM init): **FAIL as of 2026-10-31** — headless probes with the
-  flag pointed at 4.10.3112.0 and at system 4.10.2662.3 (with and without
-  `--no-sandbox`) all end in `NotSupportedError: CreateCdmFunc not
-  available`. The engine ignores `--widevine-cdm-path` on this build and
-  attempts only the 0-byte distro stub (see timeline addendum). The
-  2026-10-29 in-app session success with 4.10.3112.0 does not reproduce.
+- Stage C (CDM init): **PASS as of 2026-11-03** — headless EME probe
+  (`scripts/probe-cdm-session.py`, no flag) creates MediaKeys +
+  MediaKeySession with the 4.10.3112.0 ARM64 build served from the engine's
+  user-level lookup path; `/proc` maps confirm the helper processes hold
+  exactly that binary. (Regressed 2026-10-31 when only the flag mechanism
+  was tested against the 0-byte distro stub; the earlier 2026-10-29
+  in-app success is consistent with a loadable component build, now
+  reproduced headless.)
 - Stage D (Amazon playback): PENDING (requires an Amazon account/subscription and audio output)
 
 ## License-stage status (the remaining blocker)

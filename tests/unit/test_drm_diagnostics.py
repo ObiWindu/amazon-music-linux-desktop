@@ -169,11 +169,11 @@ def test_ensure_widevine_user_dir_updates_old_system_link(tmp_path, monkeypatch)
 
     d.ensure_widevine_user_dir()
 
-    # The stale non-native (linux_x64-on-ARM64) link is removed rather than
-    # refreshed — writing the ARM64 binary under an x64 path would be a fake
-    # architecture mapping. The native linux_arm64 link points at the newest
-    # CDM instead.
-    assert not old_link.exists() or not old_link.is_symlink()
+    # Both lookup names carry the same validated host-arch binary: the
+    # engine searches fixed layout names (linux_x64 on this build), and
+    # compatibility is enforced on the binary, not the directory name.
+    # The managed old link is refreshed to the newest CDM, not removed.
+    assert old_link.resolve() == new.resolve()
     native_link = target / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so"
     assert native_link.resolve() == new.resolve()
     manifest = json.loads((target / "manifest.json").read_text())
@@ -462,7 +462,7 @@ def test_native_platform_dir_matches_host(monkeypatch):
     assert d._native_platform_dir() == "linux_x64"
 
 
-def test_ensure_widevine_user_dir_writes_native_only(tmp_path, monkeypatch):
+def test_ensure_widevine_user_dir_writes_all_engine_lookup_names(tmp_path, monkeypatch):
     import amazon_music_desktop.browser.drm_diagnostics as d
 
     home = tmp_path / "home"
@@ -482,9 +482,37 @@ def test_ensure_widevine_user_dir_writes_native_only(tmp_path, monkeypatch):
 
     for base in ("chromium", "google-chrome"):
         target = home / ".config" / base / "WidevineCdm"
-        assert (target / "_platform_specific" / "linux_arm64" / "libwidevinecdm.so").is_symlink()
-        # never write the host binary under the foreign arch path
-        assert not (target / "_platform_specific" / "linux_x64" / "libwidevinecdm.so").exists()
+        # every engine lookup name carries the validated host-arch binary
+        for platform_dir in ("linux_arm64", "linux_x64"):
+            link = target / "_platform_specific" / platform_dir / "libwidevinecdm.so"
+            assert link.is_symlink()
+            assert link.resolve() == new.resolve()
+
+
+def test_configure_widevine_replaces_stale_flag(tmp_path, monkeypatch):
+    import os
+
+    import amazon_music_desktop.browser.drm_diagnostics as d
+
+    cdm = tmp_path / "libwidevinecdm.so"
+    host = d._host_elf_arch() or "aarch64"
+    cdm.write_bytes(_elf_bytes(183 if host == "aarch64" else 62) + b"\x00" * 64)
+    (tmp_path / "manifest.json").write_text(json.dumps({"version": "4.10.1.0"}))
+    monkeypatch.setattr(d, "CDM_PATH", cdm)
+    monkeypatch.setattr(d, "WIDEVINE_CDM_DIR", tmp_path / "WidevineCdm")
+    monkeypatch.setattr(d, "BUNDLED_CDM_DIRS", ())
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    monkeypatch.delenv("QTWEBENGINE_CHROMIUM_FLAGS", raising=False)
+    # a stale flag pointing at a deleted file must not survive startup
+    monkeypatch.setenv(
+        "QTWEBENGINE_CHROMIUM_FLAGS",
+        "--disable-gpu --widevine-cdm-path=/tmp/gone/libwidevinecdm.so",
+    )
+    assert d.configure_widevine() == cdm
+    flags = os.environ["QTWEBENGINE_CHROMIUM_FLAGS"]
+    assert "/tmp/gone/libwidevinecdm.so" not in flags
+    assert f"--widevine-cdm-path={cdm}" in flags
+    assert "--disable-gpu" in flags  # unrelated flags preserved
 
 
 def _isolated_no_cdm(tmp_path, monkeypatch, machine="aarch64"):

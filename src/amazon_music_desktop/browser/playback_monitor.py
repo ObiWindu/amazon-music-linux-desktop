@@ -120,7 +120,18 @@ PLAYBACK_MONITOR_INJECTION_JS = PLAYBACK_MONITOR_JS
 
 
 class PlaybackMonitor:
-    """Normalize browser media events into a small state machine."""
+    """Normalize browser media events into a small state machine.
+
+    Event authority model (what each event proves):
+    - 'playing' is fired by the browser when rendering starts: it confirms
+      playback has started and enters PLAYING immediately.
+    - 'play' is only a request (user gesture or play() call): BUFFERING.
+    - 'timeupdate' confirms progression only when currentTime advances; a
+      frozen position (the 0:00 failure) never promotes toward PLAYING.
+    - 'progress' means bytes are downloading/buffering and never promotes.
+    - STALLED is entered when the position freezes while PLAYING.
+    Unknown events never change state and are never errors.
+    """
 
     def __init__(
         self,

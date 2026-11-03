@@ -339,21 +339,37 @@ def build_widevine_flags(cdm: Path | None, existing: str = "") -> str:
     return f"{existing} {flag}".strip() if existing.strip() else flag
 
 
+def _strip_widevine_flags(existing: str) -> str:
+    """Drop any --widevine-cdm-path tokens (stale/conflicting configuration)."""
+    return " ".join(
+        token for token in existing.split() if not token.startswith(f"{WIDEVINE_CDM_FLAG}=")
+    )
+
+
 def configure_widevine() -> Path | None:
     """Point QtWebEngine at the newest Widevine CDM before it initializes.
 
     Must run before QApplication is constructed (Chromium reads
     QTWEBENGINE_CHROMIUM_FLAGS at engine init). Returns the CDM in use.
 
-    Caveat (verified 2026-10-31): Fedora's qt6-qtwebengine-6.11.2 ignores
-    --widevine-cdm-path — the string is absent from its binaries, a bogus
-    flagged path is never attempted in verbose logs, and the engine always
-    tries its hardcoded distro stub instead. The flag is still set because
-    other Qt/Chromium builds honor it; on affected builds use
-    engine_cdm_status() and the headless probe to see what actually loads.
+    Caveat (verified 2026-10-31, refined 2026-11-03): Fedora's
+    qt6-qtwebengine-6.11.2 ignores --widevine-cdm-path for loading — the
+    string is absent from its binaries and the loader only attempts its
+    hardcoded lookup names (``_platform_specific/linux_x64`` under the
+    distro and Chromium user dirs). The flag is still set because other
+    Qt/Chromium builds honor it; on this build loading works through the
+    user-level lookup paths maintained by ensure_widevine_user_dir()
+    (proven by the headless EME probe). A pre-existing flag that points
+    at a missing, unreadable, or incompatible binary is stale
+    configuration: it is dropped (with a warning) and replaced instead
+    of launching with a CDM Chromium cannot load.
     """
     cdm = find_usable_cdm()
     current = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+    if WIDEVINE_CDM_FLAG in current and _explicit_cdm() is None:
+        stale = current.strip()
+        current = _strip_widevine_flags(current)
+        log.warning("dropping stale Widevine CDM flag: %r", stale)
     updated = build_widevine_flags(cdm, current)
     if updated != current:
         os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = updated
@@ -540,18 +556,20 @@ def ensure_widevine_user_dir() -> None:
     """Point user-level WidevineCdm dirs at the newest usable CDM.
 
     QtWebEngine and Chromium discover Widevine through these directories.
-    (Caveat: Fedora's qt6-qtwebengine-6.11.2 ignores both these directories
-    and --widevine-cdm-path — verified 2026-10-31 — so on that build they
-    serve Chromium/Electron component discovery only. They are still
-    maintained because other builds honor them.)
-    Only the native platform directory (``linux_arm64`` on ARM64,
-    ``linux_x64`` on x86_64) is maintained — writing the host binary under
-    the opposite architecture's path would be a fake mapping and is never
-    done. Stale non-native links created by older app versions that point at
-    a managed system/bundled CDM are removed; custom user CDMs are left
-    untouched. Symlinks that point at a system or bundled CDM are updated so
-    both discovery paths use the same (newer) build. A custom user CDM is left
-    untouched.
+    The engine searches fixed layout names — verified 2026-11-03 in
+    Fedora's qt6-qtwebengine-6.11.2, whose binary contains exactly one
+    platform lookup, ``_platform_specific/linux_x64``, and whose verbose
+    log never attempts any other user path. A headless EME probe proves a
+    validated host-arch CDM placed at that lookup name loads and creates
+    MediaKeys + sessions (``scripts/probe-cdm-session.py``).
+
+    Every lookup name therefore carries the same validated host-arch
+    binary (selection already enforces ELF arch + manifest eligibility).
+    The directory name is a lookup key, not an architecture attestation:
+    compatibility is enforced on the binary itself, never trusted from
+    the path. Symlinks that point at a system or bundled CDM are updated
+    so all lookup paths use the same (newer) build. A custom user CDM
+    under any lookup name is left untouched.
     """
     cdm = find_usable_cdm()
     if cdm is None:
@@ -560,50 +578,32 @@ def ensure_widevine_user_dir() -> None:
         selected = cdm.resolve()
     except OSError:
         selected = cdm
-    native = _native_platform_dir()
-    fallbacks = [d for d in _platform_dirs() if d != native]
     home = Path.home()
     for base in (home / ".config" / "chromium", home / ".config" / "google-chrome"):
         target = base / "WidevineCdm"
         try:
             target.mkdir(parents=True, exist_ok=True)
-            # Clean up stale non-native links from older app versions that
-            # placed the host binary under the fallback arch path. Only
-            # remove symlinks pointing at managed files (or broken links);
-            # a custom user CDM under the fallback path is left alone.
-            for platform_dir in fallbacks:
-                stale = target / "_platform_specific" / platform_dir / "libwidevinecdm.so"
-                try:
-                    if stale.is_symlink():
-                        try:
-                            current = stale.resolve()
-                        except OSError:
-                            current = None
-                        if current is None or _is_managed_cdm(current):
-                            stale.unlink()
-                            log.info("removed stale non-native CDM link %s", stale)
-                except OSError as exc:
-                    log.debug("could not clean stale cdm link %s: %s", stale, exc)
             changed = False
-            sub = target / "_platform_specific" / native
-            sub.mkdir(parents=True, exist_ok=True)
-            link = sub / "libwidevinecdm.so"
-            if link.is_symlink():
-                try:
-                    current = link.resolve()
-                except OSError:
-                    current = None
-                # Replace a broken link or one pointing at a managed
-                # system/bundled CDM; never clobber a custom CDM.
-                if current != selected and (
-                    current is None or _is_managed_cdm(current) or not link.exists()
-                ):
-                    link.unlink()
+            for platform_dir in _platform_dirs():
+                sub = target / "_platform_specific" / platform_dir
+                sub.mkdir(parents=True, exist_ok=True)
+                link = sub / "libwidevinecdm.so"
+                if link.is_symlink():
+                    try:
+                        current = link.resolve()
+                    except OSError:
+                        current = None
+                    # Replace a broken link or one pointing at a managed
+                    # system/bundled CDM; never clobber a custom CDM.
+                    if current != selected and (
+                        current is None or _is_managed_cdm(current) or not link.exists()
+                    ):
+                        link.unlink()
+                        link.symlink_to(cdm)
+                        changed = True
+                elif not link.exists():
                     link.symlink_to(cdm)
                     changed = True
-            elif not link.exists():
-                link.symlink_to(cdm)
-                changed = True
             if changed or not (target / "manifest.json").exists():
                 _write_user_manifest(target, cdm)
                 log.info("updated user-level WidevineCdm dir %s -> %s", target, cdm)

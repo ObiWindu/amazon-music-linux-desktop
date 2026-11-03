@@ -100,3 +100,22 @@ today. Repro: `QT_QPA_PLATFORM=offscreen python3
 scripts/probe-cdm-session.py`; exit 1 with `CDM SESSION FAILED` above.
 Environment: Fedora Asahi Remix 44 aarch64, SELinux Enforcing, no Amazon
 account needed for this stage.
+
+## Addendum 2026-11-03 — CDM loads via the engine's user-level lookup path
+
+The 0-byte distro stub is not the whole story. Strings in
+`libQt6WebEngineCore.so.6.11.2` show the engine searches fixed layout
+names, including `~/.config/chromium/WidevineCdm` with the single
+platform subpath `_platform_specific/linux_x64`. Placing the validated
+4.10.3112.0 ARM64 binary at that lookup name (user home only — no flag,
+no system writes, no binary modification) makes the headless EME probe
+succeed: `{"ok":true,"keySystem":"com.widevine.alpha"}` repeatedly, and
+`/proc/*/maps` shows the probe's own helper processes holding exactly
+the Codex 4.10.3112.0 binary. The directory name is a lookup key, not
+an attestation — arch compatibility is enforced on the ELF binary
+(`file` confirms ARM aarch64; dlopen enforces it at load). The app now
+maintains the validated host-arch CDM under every engine lookup name
+(`ensure_widevine_user_dir()`); the `--widevine-cdm-path` flag is still
+set for builds that honor it, and stale flag values are replaced at
+startup. With a CDM loading again, VMP re-testing is unblocked pending
+an Amazon account (see `docs/LICENSE_VERIFICATION_RUNBOOK.md`).
