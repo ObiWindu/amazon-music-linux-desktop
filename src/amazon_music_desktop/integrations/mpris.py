@@ -44,7 +44,16 @@ _STOPPED_STATES = (
 
 
 def playback_status_for(state: PlaybackState) -> str:
-    """Map a normalized playback state onto an MPRIS PlaybackStatus."""
+    """Map a normalized playback state onto an MPRIS PlaybackStatus.
+
+    MPRIS only defines Playing/Paused/Stopped, so there is no encoding for
+    "browser claims playing, position not yet confirmed": a page that fired
+    'playing' reports Playing, exactly as a desktop client would show any
+    player in that state. The confirmation distinction lives in the
+    diagnostics report and status line; a claim that never confirms
+    degrades to STALLED/ERROR here (→ Stopped) via the stall watchdog
+    and media-error classification.
+    """
     if state == PlaybackState.PLAYING:
         return "Playing"
     if state == PlaybackState.PAUSED:

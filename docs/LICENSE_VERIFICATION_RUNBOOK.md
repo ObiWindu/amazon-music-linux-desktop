@@ -21,18 +21,23 @@ playback. Only this runbook's license-stage evidence counts.
 ## Procedure
 
 0. **Check the engine can load a CDM at all (no account needed).**
-   Run `QT_QPA_PLATFORM=offscreen python3 scripts/probe-cdm-session.py`.
-   It must print `CDM SESSION OK`. The app loads the CDM through the
-   engine's user-level lookup paths (maintained automatically by
-   `ensure_widevine_user_dir()` — no flag needed on builds that ignore
-   `--widevine-cdm-path`). If it prints `CDM SESSION FAILED:
-   NotSupportedError: CreateCdmFunc not available`, check Diagnostics →
-   Engine default CDM path and the user lookup dirs for a 0-byte or
-   missing file; a system administrator may repair the path (vendor
-   library, manifest alongside when available) and re-run the probe. The
-   app itself never writes outside the user-level directories. Do not
-   proceed to account-based testing until the probe passes — a license
-   failure with no loaded CDM is meaningless.
+   Run `python3 scripts/probe-cdm-session.py` (self-contained; headless by
+   default). It must print `CDM SESSION OK` and `verdict: MATCH` (exit 0).
+   The app loads the CDM through the engine's user-level lookup paths
+   (maintained automatically by `ensure_widevine_user_dir()` — no flag
+   needed on builds that ignore `--widevine-cdm-path`). If it prints
+   `CDM SESSION FAILED: NotSupportedError: CreateCdmFunc not available`
+   (exit 1), check Diagnostics → Engine default CDM path and the user
+   lookup dirs for a 0-byte or missing file; a system administrator may
+   repair the path (vendor library, manifest alongside when available)
+   and re-run the probe. The app itself never writes outside the
+   user-level directories. Do not proceed to account-based testing until
+   the probe passes — a license failure with no loaded CDM is meaningless.
+   Optionally follow with `python3 scripts/probe-cdm-license.py`: it
+   completes a full license exchange with usable keys against the
+   Widevine UAT *test* server, proving CDM health before Amazon is
+   involved (exit 0; the UAT server does not enforce Amazon's LD device
+   policy, so this is not license acceptance).
 1. Launch the app and sign in through Amazon's own login flow.
 2. Open **Diagnostics → Run diagnostics**. Confirm:
    - `CDM selected by Aurora` points at the `4.10.3112.0` build,

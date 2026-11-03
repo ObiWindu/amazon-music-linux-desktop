@@ -316,6 +316,30 @@ def test_playing_event_still_confirms_start():
     assert monitor.state == PlaybackState.PLAYING
 
 
+def test_playing_alone_is_unconfirmed_until_position_advances():
+    # Oct-29 lesson: a bare 'playing' is the browser's claim, not proof.
+    monitor = PlaybackMonitor()
+    monitor.handle_event("playing", timestamp=100.0, position=0.0, duration=200.0)
+    assert monitor.state == PlaybackState.PLAYING
+    assert monitor.confirmed is False
+    assert monitor.publish_state()["confirmed"] is False
+    assert monitor.normalized_state.confirmed is False
+    monitor.handle_event("timeupdate", timestamp=101.0, position=3.0, duration=200.0)
+    assert monitor.state == PlaybackState.PLAYING
+    assert monitor.confirmed is True
+
+
+def test_confirmation_does_not_leak_across_states():
+    monitor = PlaybackMonitor()
+    monitor.handle_event("playing", timestamp=100.0, position=5.0, duration=200.0)
+    assert monitor.confirmed is True
+    monitor.handle_event("pause", timestamp=101.0)
+    assert monitor.confirmed is False
+    assert monitor.publish_state()["confirmed"] is False
+    monitor.reset()
+    assert monitor.confirmed is False
+
+
 def test_stall_detected_despite_repeated_frozen_timeupdates():
     # The 1 Hz poll re-reports a frozen currentTime: those re-reports must
     # not feed the stall watchdog, or STALLED becomes unreachable exactly

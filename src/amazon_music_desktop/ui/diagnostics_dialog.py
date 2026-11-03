@@ -296,7 +296,10 @@ class DiagnosticsDialog(QDialog):
         if monitor is not None:
             lines.append("")
             lines.append("=== Playback ===")
-            lines.append(f"state: {monitor.state.value}")
+            state_line = f"state: {monitor.state.value}"
+            if monitor.state.value == "PLAYING" and not monitor.confirmed:
+                state_line += " (browser claim only — position not yet advancing)"
+            lines.append(state_line)
             lines.append(f"position: {monitor.position:.1f}s / {monitor.duration:.1f}s")
             lines.append(f"last media event: {monitor.last_event or 'none'}")
             # Media Session corroboration: playbackState + metadata presence

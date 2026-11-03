@@ -62,9 +62,12 @@ system build).
 - READY: filesystem validation passed for the selected CDM (manifest valid,
   host-matching ELF arch). The live CDM session probe is the only evidence
   for initialization.
-- INITIALIZED: **not currently established** — see 2026-10-31 addendum below.
-  (A 4.10.3112.0 session success was recorded 2026-10-29; it does not
-  reproduce today.)
+- INITIALIZED: **established 2026-11-03** — headless EME probe creates
+  MediaKeys + MediaKeySession with 4.10.3112.0 via the engine's user-level
+  lookup path, and `/proc` maps confirm our helpers hold exactly that
+  binary (verdict MATCH). History: a 4.10.3112.0 success was recorded
+  2026-10-29; on 2026-10-31 only the 0-byte distro stub was attempted
+  (flag ignored), so initialization failed that day — see addenda below.
 - LICENSE ACCEPTED: never observed on any build so far.
 - PLAYBACK VERIFIED: never observed.
 
@@ -119,6 +122,20 @@ maintains the validated host-arch CDM under every engine lookup name
 set for builds that honor it, and stale flag values are replaced at
 startup. With a CDM loading again, VMP re-testing is unblocked pending
 an Amazon account (see `docs/LICENSE_VERIFICATION_RUNBOOK.md`).
+
+### Same-day result: full license exchange succeeds (test server)
+
+`scripts/probe-cdm-license.py` (new) drives EME end-to-end against public
+Widevine *test* vectors (Tears of Steel PSSH + UAT proxy, no Amazon
+involved): `generateRequest` → license POST → `session.update` → all
+`keyStatuses` become `usable`. Result on this host with CDM 4.10.3112.0:
+`LICENSE EXCHANGE OK`, exit 0, twice in a row. This proves the CDM is
+fully capable of completing real license exchanges. It does NOT answer
+Amazon: the UAT test server does not enforce Amazon's LD-content device
+policy, so `VMP_VALIDATION_FAILED` for Amazon remains possible. What the
+exchange rules out is CDM health as a variable — the only remaining
+question is Amazon's device eligibility for this environment, testable
+only with an entitled account per the runbook.
 
 ## Entry 2026-11-03 — EME proven, license untested (the five facts)
 

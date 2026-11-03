@@ -11,8 +11,9 @@ and prints the redacted result.
 Success proves the CDM instantiates in this environment. It is NOT license
 acceptance and NOT playback.
 
-Exit codes: 0 CDM session OK and mapped binary verified; 1 session failed;
-2 no usable CDM selected.
+Exit codes: 0 session created and selected CDM mapping verified;
+1 CDM initialization failed; 2 no compatible CDM discovered;
+3 session created but the mapped CDM could not be verified.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from amazon_music_desktop.browser.drm_diagnostics import (
     CDM_TEST_READ_JS,
     _platform_dirs,
     cdm_version,
+    ensure_widevine_user_dir,
     find_usable_cdm,
     loaded_cdm_paths,
 )
@@ -64,29 +66,41 @@ def report_lookup_paths() -> None:
 
 
 def verify_mapped(selected: str | None) -> int:
-    """Confirm our helpers mapped the selected CDM. Returns exit code."""
+    """Exit code for the mapping check: 0 MATCH, 3 otherwise.
+
+    A successful MediaKeySession proves the CDM initialized, but only a
+    process mapping proves *which* binary Chromium loaded — the whole
+    point of this probe. No visible mapping (or an unreadable /proc) is
+    reported as unverified (3), never as success.
+    """
     try:
         mapped = [entry["path"] for entry in loaded_cdm_paths(scope="tree")]
-    except Exception as exc:  # /proc unavailable (non-Linux): session result stands
+    except Exception as exc:  # /proc unavailable (non-Linux): unverified, not OK
         print(f"mapped-CDM scan unavailable: {exc}", flush=True)
-        return 0
+        return 3
     if not mapped:
         print("mapped CDM: none visible in our helper processes", flush=True)
-        return 0
-    for path in mapped:
+        print("verdict: UNVERIFIED — session created but no mapping observed", flush=True)
+        return 3
+    for path in sorted(set(mapped)):
         print(f"mapped CDM: {path}", flush=True)
     if selected is not None and any(path == selected for path in mapped):
         print(f"verdict: MATCH — engine mapped the selected CDM ({selected})", flush=True)
         return 0
     print(
-        f"verdict: MISMATCH — selected {selected or 'none'}, "
-        f"engine mapped {', '.join(mapped)}",
+        f"verdict: UNVERIFIED — selected {selected or 'none'}, "
+        f"engine mapped {', '.join(sorted(set(mapped)))}",
         flush=True,
     )
-    return 1
+    return 3
 
 
 def main() -> int:
+    # Prepare the engine lookup paths first, exactly as the application
+    # does at startup: on a clean install they may not exist yet, and the
+    # runbook tells users to run this probe before launching the app.
+    ensure_widevine_user_dir()
+    # Second discovery after provisioning: pick up what ensure just linked.
     cdm = find_usable_cdm()
     print(f"selected CDM: {cdm} (version {cdm_version(cdm)})", flush=True)
     if cdm is None:

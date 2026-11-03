@@ -60,6 +60,7 @@ class MediaEvent:
 @dataclass
 class NormalizedPlaybackState:
     state: PlaybackState = PlaybackState.IDLE
+    confirmed: bool = False
     position: float = 0.0
     duration: float = 0.0
     last_event: str | None = None
@@ -123,14 +124,21 @@ class PlaybackMonitor:
     """Normalize browser media events into a small state machine.
 
     Event authority model (what each event proves):
-    - 'playing' is fired by the browser when rendering starts: it confirms
-      playback has started and enters PLAYING immediately.
+    - 'playing' is fired by the browser when rendering starts: it enters
+      PLAYING immediately, but that is only the browser's claim.
     - 'play' is only a request (user gesture or play() call): BUFFERING.
     - 'timeupdate' confirms progression only when currentTime advances; a
       frozen position (the 0:00 failure) never promotes toward PLAYING.
     - 'progress' means bytes are downloading/buffering and never promotes.
     - STALLED is entered when the position freezes while PLAYING.
     Unknown events never change state and are never errors.
+
+    PLAYING therefore has two levels, exposed via ``confirmed``: the
+    browser reported playback (``playing`` event) versus position evidence
+    (an advancing ``timeupdate`` while PLAYING). License-gated failures —
+    e.g. the Oct-29 trace where ``playing`` fired before Amazon rejected
+    the license — show up as unconfirmed PLAYING that degrades to STALLED
+    or ERROR instead of masquerading as success.
     """
 
     def __init__(
@@ -140,6 +148,7 @@ class PlaybackMonitor:
         page: Any = None,
     ) -> None:
         self._state = PlaybackState.IDLE
+        self._confirmed = False
         self._position = 0.0
         self._duration = 0.0
         self._last_event: str | None = None
@@ -163,6 +172,16 @@ class PlaybackMonitor:
     @property
     def current_state(self) -> PlaybackState:
         return self._state
+
+    @property
+    def confirmed(self) -> bool:
+        """True once position evidence backed a PLAYING claim.
+
+        Only meaningful while PLAYING: the browser fired 'playing' AND a
+        later timeupdate advanced currentTime. Any other state reports
+        False so stale confirmation never leaks across tracks.
+        """
+        return self._state == PlaybackState.PLAYING and self._confirmed
 
     @property
     def position(self) -> float:
@@ -200,6 +219,7 @@ class PlaybackMonitor:
     def normalized_state(self) -> NormalizedPlaybackState:
         return NormalizedPlaybackState(
             state=self._state,
+            confirmed=self.confirmed,
             position=self._position,
             duration=self._duration,
             last_event=self._last_event,
@@ -388,6 +408,18 @@ class PlaybackMonitor:
             self._state = PlaybackState.ERROR
             self._last_error = error
 
+        # Confirmation tracks whether position evidence ever backed the
+        # PLAYING claim: a fresh 'playing' without movement starts
+        # unconfirmed; any advance while PLAYING confirms it; leaving
+        # PLAYING drops confirmation so it never leaks across tracks.
+        if self._state == PlaybackState.PLAYING:
+            if position_advanced:
+                self._confirmed = True
+            elif previous != PlaybackState.PLAYING:
+                self._confirmed = False
+        else:
+            self._confirmed = False
+
         if self._state != previous and self._on_state_changed is not None:
             try:
                 self._on_state_changed(self._state)
@@ -419,6 +451,7 @@ class PlaybackMonitor:
 
     def reset(self) -> None:
         self._state = PlaybackState.IDLE
+        self._confirmed = False
         self._position = 0.0
         self._duration = 0.0
         self._last_event = None
@@ -434,6 +467,7 @@ class PlaybackMonitor:
     def publish_state(self, callback: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         payload = {
             "state": self._state.value,
+            "confirmed": self.confirmed,
             "position": self._position,
             "duration": self._duration,
             "last_event": self._last_event,

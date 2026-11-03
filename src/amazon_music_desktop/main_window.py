@@ -466,6 +466,14 @@ class MainWindow(QMainWindow):
             if event.name == "encrypted" and event.timestamp > self._encrypted_noted_at:
                 self._encrypted_noted_at = event.timestamp
                 self.playback_diagnostics.note_encrypted_media(event.timestamp)
+        # Distinguish browser-claimed PLAYING from position-confirmed
+        # playback in the status line (the 1 Hz poll is the only place that
+        # observes confirmation flips, which are not state transitions).
+        if self.monitor.state == PlaybackState.PLAYING and not self.monitor.confirmed:
+            if self.status_label.text() != "Confirming playback…":
+                self.status_label.setText("Confirming playback…")
+        elif self.status_label.text() == "Confirming playback…":
+            self.status_label.setText("")
         # Media Session corroboration, recorded only on change so the
         # 1 Hz poll does not spam the diagnostics event log.
         session = self.monitor.media_session or {}

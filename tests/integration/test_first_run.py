@@ -32,6 +32,10 @@ def test_first_run_provisions_profile_cdm_and_flag(tmp_path, monkeypatch):
     monkeypatch.setattr(d.platform, "machine", lambda: "aarch64")
     monkeypatch.delenv("QTWEBENGINE_CHROMIUM_FLAGS", raising=False)
 
+    # clean-profile start: no Chromium CDM directories exist yet
+    assert not (home / ".config" / "chromium" / "WidevineCdm").exists()
+    assert not (home / ".config" / "google-chrome" / "WidevineCdm").exists()
+
     # 1. profile + cache dirs with restrictive permissions
     pm = ProfileManager(profile_dir=home / ".local" / "share" / "test-app")
     pm.ensure_dirs()

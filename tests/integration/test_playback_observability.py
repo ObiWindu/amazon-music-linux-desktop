@@ -229,6 +229,18 @@ def test_instrumentation_runs_in_iframe_context(window, qtbot):
     assert payload.get("position") == 0
 
 
+def test_status_label_distinguishes_unconfirmed_playing(window):
+    window._on_monitor_state(json.dumps({"events": [{"name": "playing", "time": 10.0}]}))
+    assert window.monitor.state is PlaybackState.PLAYING
+    assert window.monitor.confirmed is False
+    assert window.status_label.text() == "Confirming playback…"
+    window._on_monitor_state(
+        json.dumps({"events": [{"name": "timeupdate", "time": 11.0, "position": 2.0, "duration": 200.0}]})
+    )
+    assert window.monitor.confirmed is True
+    assert window.status_label.text() == ""
+
+
 def test_diagnostics_verdict_unknown_without_mapped_cdm(window, monkeypatch):
     import amazon_music_desktop.ui.diagnostics_dialog as dlg
     from amazon_music_desktop.ui.diagnostics_dialog import DiagnosticsDialog
