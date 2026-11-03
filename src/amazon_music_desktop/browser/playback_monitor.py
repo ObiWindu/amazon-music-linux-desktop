@@ -232,19 +232,31 @@ class PlaybackMonitor:
         self.set_media_session(metadata)
 
     def update_position(self, position: Any = None, duration: Any = None, timestamp: float | None = None) -> None:
+        # The stall watchdog must only be fed by genuine movement. A frozen
+        # currentTime re-reported every second (the 0:00 failure) is not
+        # progress: refreshing the watchdog on it would make STALLED
+        # unreachable exactly when it matters.
+        progressed = False
         try:
             if position is not None:
-                self._position = float(position)
+                new_position = float(position)
+                if new_position != self._position:
+                    progressed = True
+                self._position = new_position
         except (TypeError, ValueError):
             pass
         try:
             if duration is not None:
-                self._duration = float(duration)
+                new_duration = float(duration)
+                if new_duration != self._duration:
+                    progressed = True
+                self._duration = new_duration
         except (TypeError, ValueError):
             pass
         now = time.time() if timestamp is None else float(timestamp)
-        self._last_progress_time = now
-        self._last_progress_position = self._position
+        if progressed or self._last_progress_time is None:
+            self._last_progress_time = now
+            self._last_progress_position = self._position
 
     def set_position(self, position: Any, duration: Any = None) -> None:
         self.update_position(position, duration)
@@ -356,20 +368,19 @@ class PlaybackMonitor:
             # advances: a timeupdate at a frozen position (the 0:00 case)
             # proves nothing. Advancing while BUFFERING/LOADING/STALLED
             # confirms real output, including recovery from a stall.
+            # (The stall watchdog is fed by update_position above, and only
+            # when the position or duration actually moved.)
             if position_advanced and self._state in (
                 PlaybackState.BUFFERING,
                 PlaybackState.LOADING,
                 PlaybackState.STALLED,
             ):
                 self._state = PlaybackState.PLAYING
-            self._last_progress_time = now
-            self._last_progress_position = self._position
         elif name == "progress":
-            # Media data downloading/buffering: refreshes the stall watchdog
-            # but never counts as playback. PLAYING is only ever reached via
-            # 'playing' or an advancing timeupdate.
-            self._last_progress_time = now
-            self._last_progress_position = self._position
+            # Media data downloading/buffering: informational only. Never a
+            # state change, and never a stall-watchdog feed — bytes arriving
+            # while the render position is frozen is the 0:00 failure mode.
+            pass
         # unknown events do not change state and are not errors
 
         if error and name != "error":

@@ -314,3 +314,28 @@ def test_playing_event_still_confirms_start():
     monitor.handle_event("play", timestamp=100.0)
     monitor.handle_event("playing", timestamp=100.5)
     assert monitor.state == PlaybackState.PLAYING
+
+
+def test_stall_detected_despite_repeated_frozen_timeupdates():
+    # The 1 Hz poll re-reports a frozen currentTime: those re-reports must
+    # not feed the stall watchdog, or STALLED becomes unreachable exactly
+    # when the stream sits at 0:00.
+    monitor = PlaybackMonitor(stall_timeout=5.0)
+    monitor.handle_event("playing", timestamp=100.0, position=5.0, duration=200.0)
+    assert monitor.state == PlaybackState.PLAYING
+    for tick in (101.0, 102.0, 103.0, 104.0, 105.0, 106.0):
+        monitor.handle_event("timeupdate", timestamp=tick, position=5.0, duration=200.0)
+        assert monitor.state == PlaybackState.PLAYING
+    assert monitor.detect_stalled(now=106.0) is True
+    assert monitor.state == PlaybackState.STALLED
+
+
+def test_progress_with_frozen_position_does_not_feed_watchdog():
+    # Bytes arriving while the render position is frozen (encrypted data,
+    # no keys) must not mask the stall: the watchdog only eats movement.
+    monitor = PlaybackMonitor(stall_timeout=5.0)
+    monitor.handle_event("playing", timestamp=100.0, position=5.0, duration=200.0)
+    monitor.handle_event("progress", timestamp=104.0, position=5.0, duration=200.0)
+    monitor.handle_event("progress", timestamp=106.5, position=5.0, duration=200.0)
+    assert monitor.detect_stalled(now=106.5) is True
+    assert monitor.state == PlaybackState.STALLED

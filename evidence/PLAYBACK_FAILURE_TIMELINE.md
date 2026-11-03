@@ -119,3 +119,35 @@ maintains the validated host-arch CDM under every engine lookup name
 set for builds that honor it, and stale flag values are replaced at
 startup. With a CDM loading again, VMP re-testing is unblocked pending
 an Amazon account (see `docs/LICENSE_VERIFICATION_RUNBOOK.md`).
+
+## Entry 2026-11-03 — EME proven, license untested (the five facts)
+
+- **User-level lookup path.** The engine searches fixed layout names
+  (found via binary strings in `libQt6WebEngineCore.so.6.11.2`): only
+  `_platform_specific/linux_x64` under the Chromium user dirs — no
+  `linux_arm64` lookup exists on this build. `~/.config/chromium` and
+  `~/.config/google-chrome` `WidevineCdm/_platform_specific/linux_x64/`
+  now carry the validated host-arch binary (symlinks maintained by
+  `ensure_widevine_user_dir()`); the distro stub at
+  `/usr/lib64/chromium-browser/...` is untouched (still 0 bytes).
+- **Selected CDM version.** Aurora selects Codex `4.10.3112.0` (ARM64,
+  manifest-valid, ELF-validated). The sandbox `file` check confirms:
+  `ELF 64-bit LSB shared object, ARM aarch64`.
+- **Successful EME probe.** `scripts/probe-cdm-session.py` (now
+  self-contained: offscreen default, lookup-path pre-flight, mapped-binary
+  verification, exit 0/1/2) prints
+  `CDM SESSION OK: {"ok": true, "keySystem": "com.widevine.alpha"}`
+  repeatedly — with and without `--widevine-cdm-path`, exit code 0.
+- **Actual observed mapped binary.** `/proc/*/maps` of the probe's own
+  helper processes shows five mappings of exactly
+  `~/.config/Codex/WidevineCdm/4.10.3112.0/_platform_specific/
+  linux_arm64/libwidevinecdm.so`. Selection vs loaded verdict: MATCH.
+- **Session initialization vs Amazon authorization.** MediaKeys +
+  MediaKeySession creation is proven; license acceptance is NOT tested —
+  Amazon's license server has not been contacted in this work (the
+  2026-10-29 `VMP_VALIDATION_FAILED` record stands as the only license
+  evidence). `test_go_home` passes again (earlier failures were transient
+  sandbox network issues), and PCM audio output is verified working
+  (`pw-play` exit 0; only a null sink exists here), so the remaining
+  unknowns are strictly: account-gated license response, then audible
+  playback on hardware.
