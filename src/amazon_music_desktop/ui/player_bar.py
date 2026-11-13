@@ -94,11 +94,11 @@ class TransportButton(QAbstractButton):
     def _get_glyph(self) -> str:
         return self._glyph
 
-    def _set_glyph(self, value: str) -> None:
+    def set_glyph(self, value: str) -> None:
         self._glyph = value
         self.update()
 
-    glyph = Property(str, _get_glyph, _set_glyph)
+    glyph = Property(str, _get_glyph, set_glyph)
 
     def _get_playing(self) -> bool:
         return self._playing
@@ -556,7 +556,7 @@ class PlayerBar(QFrame):
         self.volume_btn.blockSignals(True)
         self.volume_btn.setChecked(bool(muted))
         self.volume_btn.blockSignals(False)
-        self.volume_btn.glyph = "🔇" if muted else "🔊"
+        self.volume_btn.set_glyph("🔇" if muted else "🔊")
 
     def _preview_scrub(self, value: int) -> None:
         # While dragging, the bar previews the scrub target immediately;
@@ -599,7 +599,7 @@ class PlayerBar(QFrame):
         self.track_label.setText(label)
         self.track_label.setToolTip(label)
         self.play_btn.set_playing(playing)
-        self.play_btn.glyph = "⏸" if playing else "▶"
+        self.play_btn.set_glyph("⏸" if playing else "▶")
 
         for btn, key in ((self.shuffle_btn, "shuffle"), (self.repeat_btn, "repeat")):
             toggled = state.get(key, None)

@@ -9,7 +9,7 @@ desktop never holds an independent, contradictory playback state.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 from PySide6.QtDBus import (
@@ -41,6 +41,16 @@ _STOPPED_STATES = (
     PlaybackState.LOADING,
     PlaybackState.BUFFERING,
 )
+
+
+def _dbus_type(name: str) -> type:
+    """Return a D-Bus type name for Property/Signal.
+
+    PySide6 maps names like "QStringList" or "qlonglong" to the matching
+    D-Bus signature at runtime, but its typed stubs declare the argument as
+    ``type``; casting the name through satisfies both.
+    """
+    return cast("type", name)
 
 
 def playback_status_for(state: PlaybackState) -> str:
@@ -135,8 +145,8 @@ class MprisRootAdaptor(QDBusAbstractAdaptor):
     DesktopEntry = Property(str, _desktop_entry)
     # QStringList marshals to the D-Bus 'as' signature MPRIS expects; a bare
     # Python list would marshal to 'av'.
-    SupportedUriSchemes = Property("QStringList", _uri_schemes)
-    SupportedMimeTypes = Property("QStringList", _mime_types)
+    SupportedUriSchemes = Property(_dbus_type("QStringList"), _uri_schemes)
+    SupportedMimeTypes = Property(_dbus_type("QStringList"), _mime_types)
 
 
 class MprisPlayerAdaptor(QDBusAbstractAdaptor):
@@ -146,7 +156,7 @@ class MprisPlayerAdaptor(QDBusAbstractAdaptor):
     the MprisService so getters and attributes never collide.
     """
 
-    Seeked = Signal("qlonglong")
+    Seeked = Signal(_dbus_type("qlonglong"))
 
     def __init__(self, service: MprisService) -> None:
         super().__init__(service)
@@ -268,9 +278,9 @@ class MprisPlayerAdaptor(QDBusAbstractAdaptor):
     LoopStatus = Property(str, _loop_status, _set_loop_status)
     Rate = Property(float, _rate, _set_rate)
     Shuffle = Property(bool, _shuffle, _set_shuffle)
-    Metadata = Property("QVariantMap", _metadata)
+    Metadata = Property(_dbus_type("QVariantMap"), _metadata)
     Volume = Property(float, _volume, _set_volume)
-    Position = Property("qlonglong", _position)
+    Position = Property(_dbus_type("qlonglong"), _position)
     MinimumRate = Property(float, _minimum_rate)
     MaximumRate = Property(float, _maximum_rate)
     CanGoNext = Property(bool, _can_go_next)
