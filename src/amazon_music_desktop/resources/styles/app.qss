@@ -137,7 +137,7 @@ QSlider#seekSlider:horizontal::handle:hover {
     border: 1px solid #9a86ff;
 }
 QSlider#seekSlider:disabled::sub-page {
-    background: #4a4468;
+    background: #6a58e0;
 }
 QSlider#volSlider {
     background: transparent;
