@@ -99,15 +99,16 @@ def test_playlist_double_click_clears_queues_and_plays_first(window, monkeypatch
         "_fetch_playlist_songs",
         lambda href, cb: cb([{"title": "S1", "artist": "A1"}, {"title": "S2", "artist": "A2"}]),
     )
-    loaded = []
-    monkeypatch.setattr(window.view, "load", lambda url: loaded.append(url.toString()))
+    navs = []
+    monkeypatch.setattr(window, "_soft_navigate", lambda url: navs.append(url))
     window._on_playlist_double_clicked(item)
     # queue cleared, playlist songs queued, playback armed on the playlist URL
     assert window.queue_panel.songs() == ["S1 — A1", "S2 — A2"]
     assert window.queue_panel.manual_queue is True
     assert window._play_first_armed is True
     assert window._pending_play_href.endswith("/my/playlists/ABC")
-    assert loaded and loaded[0].endswith("/my/playlists/ABC")
+    # navigation is soft (SPA pushState) so playback is never interrupted
+    assert navs and navs[0].endswith("/my/playlists/ABC")
 
 
 def test_next_playing_song_is_added_to_queue_automatically(window):

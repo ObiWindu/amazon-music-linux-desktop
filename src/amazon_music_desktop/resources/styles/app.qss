@@ -103,71 +103,10 @@ QLabel#seekTick {
     color: #b8aee6;
     font-size: 10px;
 }
-QSlider#seekSlider {
+/* seek/vol sliders are painted in code by ui/player_bar.py (ThemedSlider):
+   QSS ::sub-page does not fill the progress side reliably across styles */
+QSlider#seekSlider, QSlider#volSlider {
     background: transparent;
-    min-height: 12px;
-}
-QSlider#seekSlider:horizontal {
-    background: transparent;
-}
-QSlider#seekSlider:horizontal::groove {
-    height: 5px;
-    border-radius: 2px;
-    background: #2e2847;
-    border: 1px solid #3d365e;
-}
-QSlider#seekSlider:horizontal::sub-page {
-    background: #7c6af7;
-    border-radius: 2px;
-}
-QSlider#seekSlider:horizontal::add-page {
-    background: #2e2847;
-    border-radius: 2px;
-}
-QSlider#seekSlider:horizontal::handle {
-    width: 12px;
-    height: 12px;
-    margin: -5px 0;
-    border-radius: 6px;
-    background: #e8e4ff;
-    border: 1px solid #7c6af7;
-}
-QSlider#seekSlider:horizontal::handle:hover {
-    background: #ffffff;
-    border: 1px solid #9a86ff;
-}
-QSlider#seekSlider:disabled::sub-page {
-    background: #6a58e0;
-}
-QSlider#volSlider {
-    background: transparent;
-    min-height: 12px;
-}
-QSlider#volSlider:horizontal::groove {
-    height: 4px;
-    border-radius: 2px;
-    background: #2e2847;
-    border: 1px solid #3d365e;
-}
-QSlider#volSlider:horizontal::sub-page {
-    background: #7c6af7;
-    border-radius: 2px;
-}
-QSlider#volSlider:horizontal::add-page {
-    background: #2e2847;
-    border-radius: 2px;
-}
-QSlider#volSlider:horizontal::handle {
-    width: 10px;
-    height: 10px;
-    margin: -4px 0;
-    border-radius: 5px;
-    background: #e8e4ff;
-    border: 1px solid #7c6af7;
-}
-QSlider#volSlider:horizontal::handle:hover {
-    background: #ffffff;
-    border: 1px solid #9a86ff;
 }
 
 /* queue panel (ui/queue_panel.py) — same purple family as the player bar */

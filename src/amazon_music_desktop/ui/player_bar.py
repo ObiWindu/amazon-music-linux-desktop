@@ -294,30 +294,27 @@ class TransportButton(QAbstractButton):
         self.update()
 
 
-class SeekSlider(QSlider):
-    """Progress slider. Clicking jumps to that spot, dragging scrubs.
+class ThemedSlider(QSlider):
+    """Horizontal slider painted in theme purple.
 
-    Click position is mapped through the style's groove/handle geometry so
-    the jump lands where the pointer is, not where the unadjusted widget
+    The bar paints itself instead of relying on QSS ``::sub-page``: across
+    Qt styles the stylesheet fill does not reliably cover the progress side
+    of the groove (it renders in the style highlight color, e.g. blue), so
+    the slider draws its own groove, purple fill and handle in theme colors.
+    Click/drag position is mapped through the style's groove/handle geometry
+    so the jump lands where the pointer is, not where the unadjusted widget
     width says it should.
     """
 
-    seek_requested = Signal(float)
+    TRACK = QColor("#2e2847")
+    TRACK_BORDER = QColor("#3d365e")
+    FILL_DISABLED = QColor("#6a58e0")
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(Qt.Orientation.Horizontal, parent)
-        self.setObjectName("seekSlider")
-        self.setRange(0, 1000)
-        self.setValue(0)
         self.setFixedHeight(22)
-        self.setEnabled(False)
-
-    def set_progress(self, progress: float, total_seconds: float) -> None:
-        known = total_seconds > 0
-        self.setEnabled(known)
-        if not known or self.isSliderDown():
-            return
-        self.setValue(int(clamp01(progress) * self.maximum()))
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pressing = False
 
     def _ratio_at(self, x: float) -> float:
         opt = QStyleOptionSlider()
@@ -333,21 +330,105 @@ class SeekSlider(QSlider):
         pos = x - groove.x() - handle.width() / 2
         return clamp01(pos / span)
 
+    def _set_value_at(self, x: float) -> None:
+        self.setValue(self.minimum() + int((self.maximum() - self.minimum()) * self._ratio_at(x)))
+
     def mousePressEvent(self, event) -> None:
-        # Let the base class establish press/drag state first, then correct
-        # the value with the groove-accurate mapping (the stock mapping
-        # ignores handle insets and lands off-target near the edges).
-        super().mousePressEvent(event)
         if self.isEnabled() and event.button() == Qt.MouseButton.LeftButton:
-            self.setValue(self.minimum() + int((self.maximum() - self.minimum()) * self._ratio_at(event.position().x())))
+            # Block the base class so its own style-dependent change (a page
+            # step on groove clicks, absolute-set on some styles) does not
+            # fire a second valueChanged; the groove-accurate mapping below
+            # is the single value change for the press, so clicking anywhere
+            # on the bar jumps straight to the pointer.
+            self.blockSignals(True)
+            super().mousePressEvent(event)
+            self.blockSignals(False)
+            self._pressing = True
+            if self.isSliderDown():
+                self.sliderPressed.emit()
+            else:
+                self.setSliderDown(True)
+            self._set_value_at(event.position().x())
+        else:
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
         # While scrubbing, keep every move on the same accurate mapping;
         # the base class would otherwise drift with its own geometry.
-        if self.isEnabled() and self.isSliderDown() and event.buttons() & Qt.MouseButton.LeftButton:
-            self.setValue(self.minimum() + int((self.maximum() - self.minimum()) * self._ratio_at(event.position().x())))
+        if self.isEnabled() and self._pressing and event.buttons() & Qt.MouseButton.LeftButton:
+            self._set_value_at(event.position().x())
         else:
             super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        # Some Qt builds never emit sliderReleased from the base release
+        # handler (leaving sliderDown stuck); own the press/release pair so
+        # exactly one sliderPressed/sliderReleased is emitted per click.
+        pressing = self._pressing
+        self._pressing = False
+        self.blockSignals(True)
+        super().mouseReleaseEvent(event)
+        if self.isSliderDown():
+            self.setSliderDown(False)
+        self.blockSignals(False)
+        if pressing:
+            self.sliderReleased.emit()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        style = self.style()
+        groove = style.subControlRect(
+            QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderGroove, self
+        )
+        handle = style.subControlRect(
+            QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderHandle, self
+        )
+        if groove.width() > 0:
+            radius = groove.height() / 2
+            p.setPen(QPen(self.TRACK_BORDER, 1))
+            p.setBrush(self.TRACK)
+            p.drawRoundedRect(groove, radius, radius)
+            span = max(1, groove.width() - handle.width())
+            if self.maximum() > self.minimum():
+                ratio = clamp01((self.value() - self.minimum()) / (self.maximum() - self.minimum()))
+            else:
+                ratio = 0.0
+            fill_w = handle.width() / 2 + ratio * span
+            fill = QColor(ACCENT) if self.isEnabled() else self.FILL_DISABLED
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(fill)
+            p.drawRoundedRect(
+                QRectF(groove.x(), groove.y(), max(fill_w, radius), groove.height()), radius, radius
+            )
+            center = handle.center()
+            r = max(5.0, groove.height() / 2 + 2.5)
+            p.setPen(QPen(QColor(ACCENT), 1.2))
+            p.setBrush(QColor("#ffffff") if self.underMouse() else QColor(IDLE))
+            p.drawEllipse(center, r, r)
+        p.end()
+
+
+class SeekSlider(ThemedSlider):
+    """Progress slider. Clicking jumps to that spot, dragging scrubs."""
+
+    seek_requested = Signal(float)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("seekSlider")
+        self.setRange(0, 1000)
+        self.setValue(0)
+        self.setEnabled(False)
+
+    def set_progress(self, progress: float, total_seconds: float) -> None:
+        known = total_seconds > 0
+        self.setEnabled(known)
+        if not known or self.isSliderDown():
+            return
+        self.setValue(int(clamp01(progress) * self.maximum()))
 
     def mouseReleaseEvent(self, event) -> None:
         super().mouseReleaseEvent(event)
@@ -367,6 +448,7 @@ class PlayerBar(QFrame):
         self.setObjectName("playerBar")
         self.setFixedHeight(92)
         self._vol_dragging = False
+        self._vol_sent: int | None = None
         self._duration = 0.0
         # Time-bar interpolation: the page probe refreshes the position once
         # per second; between polls the bar extrapolates from the last anchor
@@ -418,7 +500,7 @@ class PlayerBar(QFrame):
         controls.addLayout(transport)
 
         self.volume_btn = TransportButton("🔊", "Mute", toggle=True)
-        self.vol_slider = QSlider(Qt.Orientation.Horizontal)
+        self.vol_slider = ThemedSlider()
         self.vol_slider.setObjectName("volSlider")
         self.vol_slider.setRange(0, 100)
         self.vol_slider.setValue(100)
@@ -452,10 +534,18 @@ class PlayerBar(QFrame):
 
     def _end_vol_drag(self) -> None:
         self._vol_dragging = False
-        self.volume_changed.emit(self.vol_slider.value())
+        self._emit_volume(self.vol_slider.value())
 
     def _maybe_emit_volume(self, value: int) -> None:
         if self._vol_dragging:
+            self._emit_volume(value)
+
+    def _emit_volume(self, value: int) -> None:
+        # One page update per distinct value: a click emits exactly once, a
+        # drag emits per step, and a release on an unchanged value is a no-op.
+        value = int(value)
+        if value != self._vol_sent:
+            self._vol_sent = value
             self.volume_changed.emit(value)
 
     def _set_muted(self, muted: bool) -> None:
@@ -532,6 +622,7 @@ class PlayerBar(QFrame):
             self.vol_slider.blockSignals(True)
             self.vol_slider.setValue(int(clamp01(volume) * 100))
             self.vol_slider.blockSignals(False)
+            self._vol_sent = self.vol_slider.value()
             self.set_muted(bool(state.get("muted", self.volume_btn.isChecked())))
 
     def _on_seek_requested(self, fraction: float) -> None:

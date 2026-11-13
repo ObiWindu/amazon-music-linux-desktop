@@ -72,10 +72,29 @@ _PLAYLIST_ROW_SELECTORS = (
     'li[role="row"]'
 )
 
+# The substring selectors also match nested children of a row (a row's
+# title/artist spans carry "track"/"song" in their own testids), which
+# would queue the same song several times as partial rows. Keep only the
+# outermost matching element of each row subtree.
+_ROWS_TOPMOST_JS = (
+    "var rows=document.querySelectorAll(__SEL__);"
+    "var top=[];"
+    "for(var i=0;i<rows.length;i++){"
+    "var p=rows[i].parentElement;"
+    "if(p&&p.closest(__SEL__))continue;"
+    "top.push(rows[i]);}"
+    "rows=top;"
+)
+
+
+def _topmost_rows_js() -> str:
+    return _ROWS_TOPMOST_JS.replace("__SEL__", json.dumps(_PLAYLIST_ROW_SELECTORS))
+
+
 PLAYLIST_SONGS_PROBE_JS = (
     "(function(){"
-    "var rows=document.querySelectorAll(" + json.dumps(_PLAYLIST_ROW_SELECTORS) + ");"
-    "function txt(el){return ((el&&el.textContent)||'').replace(/\\s+/g,' ').trim();}"
+    + _topmost_rows_js()
+    + "function txt(el){return ((el&&el.textContent)||'').replace(/\\s+/g,' ').trim();}"
     "var items=[];var seen={};"
     "for(var i=0;i<rows.length&&items.length<" + str(_MAX_SONGS) + ";i++){"
     "var r=rows[i];"
@@ -118,8 +137,8 @@ _CLICK_EL = (
 PLAY_FIRST_SONG_JS = (
     "(function(){"
     "var dock=__DOCK__;"
-    "var rows=document.querySelectorAll(" + json.dumps(_PLAYLIST_ROW_SELECTORS) + ");"
-    "for(var i=0;i<rows.length;i++){"
+    + _topmost_rows_js()
+    + "for(var i=0;i<rows.length;i++){"
     "var r=rows[i];var rect=r.getBoundingClientRect();"
     "if(rect.width<40||rect.height<20)continue;"
     "if(rect.top<0||rect.bottom>window.innerHeight-dock+8)continue;"

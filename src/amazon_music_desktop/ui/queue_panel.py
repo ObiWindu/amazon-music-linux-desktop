@@ -108,6 +108,15 @@ class QueuePanel(QFrame):
             # same song, next poll tick: re-affirm the highlight only
             self._highlight_current()
             return
+        if self._manual:
+            existing = self._row_index_for(key)
+            if existing is not None:
+                # the song is already queued (its playlist was queued):
+                # move the now-playing highlight to that row instead of
+                # appending a duplicate
+                self._current_key = key
+                self._highlight_current()
+                return
         self._current_key = key
         item = QListWidgetItem(label)
         item.setToolTip(label)
@@ -138,9 +147,12 @@ class QueuePanel(QFrame):
         Accepts labels (str), ``(title, artist)`` pairs, or
         ``{"title": ..., "artist": ...}`` dicts. Rows are appended as
         upcoming entries: the current-song highlight is re-affirmed but no
-        row is treated as playing. Returns the number of rows added.
+        row is treated as playing. Songs already in the list are skipped, so
+        queueing a playlist never duplicates the song that is already
+        playing. Returns the number of rows added.
         """
         added = 0
+        existing = {self.list.item(i).text() for i in range(self.list.count())}
         for song in songs:
             title, artist = "", ""
             if isinstance(song, dict):
@@ -152,8 +164,9 @@ class QueuePanel(QFrame):
             else:
                 title = str(song or "")
             label = track_label(title, artist)
-            if not label:
+            if not label or label in existing:
                 continue
+            existing.add(label)
             item = QListWidgetItem(label)
             item.setToolTip(label)
             self.list.addItem(item)
@@ -164,15 +177,19 @@ class QueuePanel(QFrame):
             self._sync_note()
         return added
 
-    def _current_row_index(self) -> int | None:
-        """List index of the now-playing row, or None when not displayed."""
-        if not self._current_key:
+    def _row_index_for(self, key: str) -> int | None:
+        """List index of the row whose song title matches *key*, or None."""
+        if not key:
             return None
         for index in range(self.list.count()):
             row = self.list.item(index)
-            if _row_key(row.text()) == self._current_key:
+            if _row_key(row.text()) == key:
                 return index
         return None
+
+    def _current_row_index(self) -> int | None:
+        """List index of the now-playing row, or None when not displayed."""
+        return self._row_index_for(self._current_key)
 
     def _highlight_current(self) -> QListWidgetItem | None:
         """Mark the now-playing row — bold, accent-colored text, tinted row

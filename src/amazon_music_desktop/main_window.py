@@ -63,6 +63,27 @@ log = get_logger("main_window")
 # so the bar never claims a mode the page did not take.
 _TOGGLE_BUTTON_ATTRS = {"shuffle": "shuffle_btn", "repeat": "repeat_btn"}
 
+# Client-side ("soft") navigation for the Amazon SPA. A full view.load()
+# reloads the document and tears down the page's media element, which stops
+# playback and reboots the SPA (so a route like the favorites filter never
+# sticks). Pushing the URL and dispatching popstate lets the SPA's own
+# router render the route inside the same document, so the player keeps
+# playing. Only a target that cannot be pushed same-origin falls back to a
+# full load.
+_SOFT_NAV_JS = (
+    "(function(){"
+    "var target=__URL__;"
+    "try{"
+    "var u=new URL(target,location.href);"
+    "if(u.origin!==location.origin)return 'cross-origin';"
+    "if(location.href===u.href)return 'same';"
+    "history.pushState(history.state,'',u.href);"
+    "window.dispatchEvent(new PopStateEvent('popstate',{state:history.state}));"
+    "return location.href===u.href?'pushed':'failed';"
+    "}catch(e){return 'error';}"
+    "})()"
+)
+
 
 class WebPage(QWebEnginePage):
     def __init__(self, profile, policy, diagnostics=None, parent=None):
@@ -358,12 +379,38 @@ class MainWindow(QMainWindow):
             "favorites": base + "/my/music?filter=FAVORITES",
         }
         url = mapping.get(section, base + "/")
-        self.view.load(QUrl(url))
+        self._soft_navigate(url)
         self._set_active({
             "home": self.btn_home, "search": self.btn_search, "library": self.btn_library,
             "playlists": self.btn_playlists, "favorites": self.btn_favorites,
         }[section])
         self.stack.setCurrentWidget(self.browser_page)
+
+    def _soft_navigate(self, url: str) -> None:
+        """Navigate the SPA without a document reload so playback never stops.
+
+        Sidebar buttons (Home/Search/Library/Playlists/Favorites) must not
+        interrupt the current song: a full ``view.load()`` destroys the
+        page's media element. The URL is pushed and a popstate dispatched so
+        the page's own router renders the route in the same document. Only a
+        target that cannot be pushed same-origin falls back to a full load.
+        """
+        if self.current_url() == url:
+            return
+        js = _SOFT_NAV_JS.replace("__URL__", json.dumps(url))
+        try:
+            self.view.page().runJavaScript(
+                js, lambda result, u=url: self._on_soft_nav_result(u, result)
+            )
+        except Exception as exc:
+            log.warning("soft navigation failed to start: %s", exc)
+            self.view.load(QUrl(url))
+
+    def _on_soft_nav_result(self, url: str, result) -> None:
+        if result in ("pushed", "same"):
+            return
+        log.info("soft navigation to %s returned %r; falling back to full load", url, result)
+        self.view.load(QUrl(url))
 
     def show_settings(self):
         self.stack.setCurrentWidget(self.settings_page)
@@ -449,6 +496,24 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Loading {name}…")
         self._fetch_playlist_songs(href, lambda songs, n=name, h=href: self._play_playlist(n, h, songs))
 
+    @staticmethod
+    def _is_playlist_url(url: str) -> bool:
+        return "/playlists/" in url.split("?")[0].split("#")[0]
+
+    def _maybe_queue_current_playlist(self) -> None:
+        """A playlist started playing from the page: queue all its songs.
+
+        The queue panel otherwise learns only the song being played (one row
+        per track change). When the current page URL is a playlist, fetch the
+        full track list through the offscreen page (cached per URL) and add
+        every song to the player queue; songs already queued are skipped.
+        """
+        url = self.current_url()
+        if not self._is_playlist_url(url):
+            return
+        name = url.rstrip("/").split("/")[-1] or "playlist"
+        self._fetch_playlist_songs(url, lambda songs, n=name: self._queue_playlist_songs(n, songs))
+
     def _queue_playlist_songs(self, name: str, songs: list[dict[str, str]]) -> None:
         if not songs:
             self.status_label.setText(f"No songs found for {name}")
@@ -465,11 +530,12 @@ class MainWindow(QMainWindow):
         added = self.queue_panel.add_songs(songs)
         self.status_label.setText(f"Playing {name} ({added} songs queued)")
         # Playback authority stays the visible page: navigate it to the
-        # playlist, then click the first song once the SPA has rendered.
+        # playlist (soft, so a playing song is not interrupted), then click
+        # the first song once the SPA has rendered.
         self._pending_play_href = href
         self._play_first_armed = True
         self._play_first_done = False
-        self.view.load(QUrl(href))
+        self._soft_navigate(href)
 
     def _fetch_playlist_songs(self, href: str, callback) -> None:
         """Fetch a playlist's songs through the offscreen page (cached by href)."""
@@ -734,6 +800,9 @@ class MainWindow(QMainWindow):
             self.playback_diagnostics.note_track_selected()
             if self.mpris is not None:
                 self.mpris.advance_track()
+            # starting a playlist from the page queues all its songs, not
+            # only the one being played
+            self._maybe_queue_current_playlist()
         self.player_bar.set_state(state)
         self.now_playing.set_playing(playing)
     def _on_url_changed(self, url):
@@ -853,6 +922,14 @@ class MainWindow(QMainWindow):
         menu = QMenu()
         show_act = menu.addAction("Show"); show_act.triggered.connect(self.show_and_raise)
         hide_act = menu.addAction("Hide"); hide_act.triggered.connect(self.hide)
+        menu.addSeparator()
+        # transport controls: the same page-player actions as the native bar
+        prev_act = menu.addAction("Previous track")
+        prev_act.triggered.connect(lambda: self._player_js("previous"))
+        play_act = menu.addAction("Play/Stop")
+        play_act.triggered.connect(lambda: self._player_js("play"))
+        next_act = menu.addAction("Next track")
+        next_act.triggered.connect(lambda: self._player_js("next"))
         menu.addSeparator()
         home_act = menu.addAction("Home"); home_act.triggered.connect(self.go_home)
         settings_act = menu.addAction("Settings"); settings_act.triggered.connect(self.show_settings)
