@@ -155,3 +155,9 @@ QSlider#volSlider:horizontal::handle {
 QSlider#volSlider:horizontal::handle:hover {
     background: #ffffff;
 }
+
+/* queue panel (ui/queue_panel.py) */
+QListWidget#queueList::item {
+    padding: 4px 6px;
+    border-radius: 4px;
+}

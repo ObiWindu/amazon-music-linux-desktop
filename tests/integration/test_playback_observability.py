@@ -111,6 +111,24 @@ def test_player_action_miss_is_observable_without_false_success(window):
     assert window.monitor.state is PlaybackState.IDLE
 
 
+def test_toggle_button_reverts_on_missed_action(window):
+    window.player_bar.shuffle_btn.setChecked(True)
+    window._on_action_result("shuffle", "", window.player_bar.shuffle_btn)
+    assert window.player_bar.shuffle_btn.isChecked() is False
+    assert any(
+        e.kind == "player_action_missed" for e in window.playback_diagnostics.events
+    )
+
+
+def test_toggle_button_keeps_state_on_successful_action(window):
+    window.player_bar.shuffle_btn.setChecked(True)
+    window._on_action_result("shuffle", "sel:shuffle", window.player_bar.shuffle_btn)
+    assert window.player_bar.shuffle_btn.isChecked() is True
+    assert any(
+        e.kind == "player_action" for e in window.playback_diagnostics.events
+    )
+
+
 def test_player_action_success_strategy_is_recorded(window):
     window._on_action_result("next", "geom:512:Next")
     matches = [

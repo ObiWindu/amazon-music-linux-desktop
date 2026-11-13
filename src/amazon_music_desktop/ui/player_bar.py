@@ -1,7 +1,8 @@
-"""Native player bar with animated transport controls."""
+"""Native player bar: bottom-docked transport with a live time bar."""
 from __future__ import annotations
 
 import math
+import time
 
 from PySide6.QtCore import (
     Property,
@@ -21,6 +22,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QSlider,
+    QStyle,
+    QStyleOptionSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -124,7 +127,8 @@ class TransportButton(QAbstractButton):
         group.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def mousePressEvent(self, event) -> None:
-        self.pop()
+        # 'pressed' (connected to pop by owners) already animates; painting
+        # twice per click would stack overlapping animations.
         super().mousePressEvent(event)
 
     def paintEvent(self, event) -> None:
@@ -176,7 +180,12 @@ class TransportButton(QAbstractButton):
 
 
 class SeekSlider(QSlider):
-    """Progress slider. Clicking jumps to that spot, dragging scrubs."""
+    """Progress slider. Clicking jumps to that spot, dragging scrubs.
+
+    Click position is mapped through the style's groove/handle geometry so
+    the jump lands where the pointer is, not where the unadjusted widget
+    width says it should.
+    """
 
     seek_requested = Signal(float)
 
@@ -185,7 +194,7 @@ class SeekSlider(QSlider):
         self.setObjectName("seekSlider")
         self.setRange(0, 1000)
         self.setValue(0)
-        self.setFixedHeight(16)
+        self.setFixedHeight(22)
         self.setEnabled(False)
 
     def set_progress(self, progress: float, total_seconds: float) -> None:
@@ -195,12 +204,35 @@ class SeekSlider(QSlider):
             return
         self.setValue(int(clamp01(progress) * self.maximum()))
 
+    def _ratio_at(self, x: float) -> float:
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        style = self.style()
+        groove = style.subControlRect(
+            QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderGroove, self
+        )
+        handle = style.subControlRect(
+            QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderHandle, self
+        )
+        span = max(1, groove.width() - handle.width())
+        pos = x - groove.x() - handle.width() / 2
+        return clamp01(pos / span)
+
     def mousePressEvent(self, event) -> None:
-        if self.isEnabled() and event.button() == Qt.MouseButton.LeftButton:
-            span = max(1, self.width())
-            ratio = event.position().x() / span
-            self.setValue(self.minimum() + int((self.maximum() - self.minimum()) * clamp01(ratio)))
+        # Let the base class establish press/drag state first, then correct
+        # the value with the groove-accurate mapping (the stock mapping
+        # ignores handle insets and lands off-target near the edges).
         super().mousePressEvent(event)
+        if self.isEnabled() and event.button() == Qt.MouseButton.LeftButton:
+            self.setValue(self.minimum() + int((self.maximum() - self.minimum()) * self._ratio_at(event.position().x())))
+
+    def mouseMoveEvent(self, event) -> None:
+        # While scrubbing, keep every move on the same accurate mapping;
+        # the base class would otherwise drift with its own geometry.
+        if self.isEnabled() and self.isSliderDown() and event.buttons() & Qt.MouseButton.LeftButton:
+            self.setValue(self.minimum() + int((self.maximum() - self.minimum()) * self._ratio_at(event.position().x())))
+        else:
+            super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         super().mouseReleaseEvent(event)
@@ -218,31 +250,57 @@ class PlayerBar(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("playerBar")
-        self.setFixedHeight(100)
+        self.setFixedHeight(92)
         self._vol_dragging = False
+        self._duration = 0.0
+        # Time-bar interpolation: the page probe refreshes the position once
+        # per second; between polls the bar extrapolates from the last anchor
+        # while the position is actually moving (and only then).
+        self._playing = False
+        self._advancing = False
+        self._anchor_pos = 0.0
+        self._anchor_at = 0.0
+        self._last_cur: float | None = None
+        self._clock = QTimer(self)
+        self._clock.setInterval(250)
+        self._clock.timeout.connect(self._tick_position)
+        self._clock.start()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 6, 16, 10)
         outer.setSpacing(2)
 
-        top = QHBoxLayout()
-        top.setSpacing(6)
+        # time bar: full width along the top edge of the bar
+        seek_row = QHBoxLayout()
+        seek_row.setSpacing(8)
+        self.time_cur = QLabel("0:00")
+        self.time_cur.setObjectName("seekTick")
+        self.time_total = QLabel("0:00")
+        self.time_total.setObjectName("seekTick")
+        self.seek = SeekSlider()
+        seek_row.addWidget(self.time_cur)
+        seek_row.addWidget(self.seek, 1)
+        seek_row.addWidget(self.time_total)
+        outer.addLayout(seek_row)
+
+        # controls row: track title left, transport centered, volume right
+        controls = QHBoxLayout()
+        controls.setSpacing(6)
 
         self.shuffle_btn = TransportButton("🔀", "Shuffle", toggle=True)
         self.prev_btn = TransportButton("⏮", "Previous track")
         self.play_btn = TransportButton("▶", "Play / Pause")
         self.next_btn = TransportButton("⏭", "Next track")
         self.repeat_btn = TransportButton("🔁", "Repeat", toggle=True)
-
-        top.addWidget(self.shuffle_btn)
-        top.addWidget(self.prev_btn)
-        top.addWidget(self.play_btn)
-        top.addWidget(self.next_btn)
-        top.addWidget(self.repeat_btn)
+        transport = QHBoxLayout()
+        transport.setSpacing(6)
+        for btn in (self.shuffle_btn, self.prev_btn, self.play_btn, self.next_btn, self.repeat_btn):
+            transport.addWidget(btn)
 
         self.track_label = QLabel("Amazon Music")
         self.track_label.setObjectName("trackTitle")
-        top.addWidget(self.track_label, 1)
+        controls.addWidget(self.track_label, 1)
+        controls.addLayout(transport)
 
         self.volume_btn = TransportButton("🔊", "Mute", toggle=True)
         self.vol_slider = QSlider(Qt.Orientation.Horizontal)
@@ -250,22 +308,16 @@ class PlayerBar(QFrame):
         self.vol_slider.setRange(0, 100)
         self.vol_slider.setValue(100)
         self.vol_slider.setFixedWidth(110)
-        top.addWidget(self.volume_btn)
-        top.addWidget(self.vol_slider)
+        volume_area = QWidget()
+        volume_layout = QHBoxLayout(volume_area)
+        volume_layout.setContentsMargins(0, 0, 0, 0)
+        volume_layout.setSpacing(6)
+        volume_layout.addStretch(1)
+        volume_layout.addWidget(self.volume_btn)
+        volume_layout.addWidget(self.vol_slider)
+        controls.addWidget(volume_area, 1)
 
-        outer.addLayout(top)
-
-        bottom = QHBoxLayout()
-        bottom.setSpacing(8)
-        self.time_cur = QLabel("0:00")
-        self.time_cur.setObjectName("seekTick")
-        self.time_total = QLabel("0:00")
-        self.time_total.setObjectName("seekTick")
-        self.seek = SeekSlider()
-        bottom.addWidget(self.time_cur)
-        bottom.addWidget(self.seek, 1)
-        bottom.addWidget(self.time_total)
-        outer.addLayout(bottom)
+        outer.addLayout(controls)
 
         for btn in (self.shuffle_btn, self.prev_btn, self.play_btn, self.next_btn, self.repeat_btn, self.volume_btn):
             btn.pressed.connect(btn.pop)
@@ -274,7 +326,8 @@ class PlayerBar(QFrame):
         self.vol_slider.sliderPressed.connect(self._start_vol_drag)
         self.vol_slider.sliderReleased.connect(self._end_vol_drag)
         self.vol_slider.valueChanged.connect(self._maybe_emit_volume)
-        self.seek.seek_requested.connect(self.seek_requested)
+        self.seek.seek_requested.connect(self._on_seek_requested)
+        self.seek.valueChanged.connect(self._preview_scrub)
 
     def _flip_play_glyph(self) -> None:
         self.play_btn.set_playing(not self.play_btn.playing)
@@ -300,26 +353,87 @@ class PlayerBar(QFrame):
         self.volume_btn.blockSignals(False)
         self.volume_btn.glyph = "🔇" if muted else "🔊"
 
+    def _preview_scrub(self, value: int) -> None:
+        # While dragging, the bar previews the scrub target immediately;
+        # the poll-driven set_state takes over again on release.
+        if self._duration > 0 and self.seek.isSliderDown():
+            self.time_cur.setText(format_time(float(value) / self.seek.maximum() * self._duration))
+
     def set_state(self, state: dict) -> None:
-        """Mirror a parsed page-player state onto the native widgets."""
+        """Mirror a parsed page-player state onto the native widgets.
+
+        Toggle keys (``shuffle``/``repeat``) are tri-state: True/False sync
+        the button from the page, None (page exposes nothing) leaves the
+        local control untouched instead of guessing. Volume and mute are
+        synced only while a track is actually loaded: with no media element
+        the page reports defaults (full volume, not muted) that must never
+        clobber the user's local settings.
+        """
         title = state.get("title") or ""
+        artist = state.get("artist") or ""
         cur = float(state.get("cur") or 0)
         dur = float(state.get("dur") or 0)
         paused = bool(state.get("paused", True))
-        volume = float(state.get("volume", self.vol_slider.value() / 100))
-        muted = bool(state.get("muted", self.volume_btn.isChecked()))
-
         playing = not paused
-        self.track_label.setText(title)
+
+        self._duration = dur
+        self._playing = playing
+        # The time bar advances between polls only on evidence that the page
+        # position actually moves: a frozen currentTime (the 0:00 failure,
+        # wherever it sits) is never animated into fake progress. The very
+        # first sighting of a moving position (app restart mid-track) is
+        # taken optimistically; every later poll must show movement.
+        first_sight = self._last_cur is None
+        moved = (not first_sight) and cur != self._last_cur
+        self._advancing = playing and dur > 0 and cur > 0 and (moved or first_sight)
+        self._last_cur = cur
+        self._anchor_pos = cur
+        self._anchor_at = time.monotonic()
+
+        label = f"{title} — {artist}" if title and artist else (title or "Amazon Music")
+        self.track_label.setText(label)
+        self.track_label.setToolTip(label)
         self.play_btn.set_playing(playing)
         self.play_btn.glyph = "⏸" if playing else "▶"
 
+        for btn, key in ((self.shuffle_btn, "shuffle"), (self.repeat_btn, "repeat")):
+            toggled = state.get(key, None)
+            if toggled is not None:
+                btn.blockSignals(True)
+                btn.setChecked(bool(toggled))
+                btn.blockSignals(False)
+
+        if self.seek.isSliderDown():
+            # Scrub in progress: preview owns the elapsed readout and the
+            # handle; the page state catches up on release.
+            self.time_total.setText(format_time(dur) if dur > 0 else "0:00")
+            return
         self.seek.set_progress(cur / dur if dur > 0 else 0.0, dur)
         self.time_cur.setText(format_time(cur))
         self.time_total.setText(format_time(dur) if dur > 0 else "0:00")
 
-        if not self._vol_dragging:
+        if dur > 0 and not self._vol_dragging:
+            volume = float(state.get("volume", self.vol_slider.value() / 100))
             self.vol_slider.blockSignals(True)
             self.vol_slider.setValue(int(clamp01(volume) * 100))
             self.vol_slider.blockSignals(False)
-        self.set_muted(muted)
+            self.set_muted(bool(state.get("muted", self.volume_btn.isChecked())))
+
+    def _on_seek_requested(self, fraction: float) -> None:
+        """Anchor the time bar at the seek target immediately, then forward."""
+        if self._duration > 0:
+            target = clamp01(fraction) * self._duration
+            self._anchor_pos = target
+            self._anchor_at = time.monotonic()
+            self._advancing = self._playing
+            self.time_cur.setText(format_time(target))
+        self.seek_requested.emit(fraction)
+
+    def _tick_position(self) -> None:
+        """Advance the time bar between polls while the position moves."""
+        if not self._advancing or self.seek.isSliderDown() or self._duration <= 0:
+            return
+        elapsed = max(0.0, time.monotonic() - self._anchor_at)
+        shown = min(self._anchor_pos + elapsed, self._duration)
+        self.seek.setValue(round(shown / self._duration * self.seek.maximum()))
+        self.time_cur.setText(format_time(shown))

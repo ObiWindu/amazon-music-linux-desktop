@@ -63,9 +63,90 @@ def test_queue_panel_shows_note_when_empty(qapp):
     assert panel.note.text() == ""
 
 
+def test_scrape_then_same_song_does_not_duplicate(qapp):
+    panel = QueuePanel()
+    panel.on_track("Song A", "Performer")
+    panel.set_upcoming(["Song A — Performer", "Song B"])
+    panel.on_track("Song A", "Performer")  # next poll tick, same song
+    panel.on_track("Song A", "Performer")
+    assert panel.songs() == ["Song A — Performer", "Song B"]
+
+
+def test_identical_scrape_is_noop(qapp, monkeypatch):
+    panel = QueuePanel()
+    panel.on_track("Song A")
+    panel.set_upcoming(["Song A", "Song B"])
+    clears = []
+    monkeypatch.setattr(panel.list, "clear", lambda: clears.append(1))
+    panel.set_upcoming(["Song A", "Song B"])  # unchanged scrape: no rebuild
+    assert clears == []
+    assert panel.songs() == ["Song A", "Song B"]
+
+
+def test_highlight_follows_current_after_scrape(qapp):
+    from PySide6.QtGui import QFont
+
+    panel = QueuePanel()
+    panel.on_track("Song B")
+    panel.set_upcoming(["Song A", "Song B — Performer", "Song C"])
+    panel.on_track("Song B")
+    bold = QFont()
+    bold.setBold(True)
+    assert panel.list.item(1).font() == bold
+    assert panel.list.item(0).font() != bold
+    assert panel.list.item(2).font() != bold
+
+
+def test_scrape_without_current_then_recovery_appends_once(qapp):
+    panel = QueuePanel()
+    panel.on_track("Played")
+    panel.set_upcoming(["Next 1"])  # page queue replaced, current missing
+    assert panel.songs() == ["Next 1"]
+    panel.on_track("Played")  # next poll recovers the now-playing row
+    assert panel.songs() == ["Next 1", "Played"]
+    panel.on_track("Played")
+    assert panel.songs() == ["Next 1", "Played"]
+
+
 def test_queue_panel_empty_scrape_keeps_history(qapp):
     panel = QueuePanel()
     panel.on_track("Played Song")
     panel.set_upcoming([])
     panel.set_upcoming(["", "   "])
     assert panel.songs() == ["Played Song"]
+
+
+def test_current_row_gets_play_icon_and_accent_styling(qapp):
+    panel = QueuePanel()
+    panel.on_track("Song A")
+    panel.on_track("Song B")
+    current = panel.list.item(1)
+    other = panel.list.item(0)
+    assert not current.icon().isNull()
+    assert current.font().bold()
+    assert current.foreground().color().name() == "#7c6af7"
+    assert current.background().color().name() == "#31324a"
+    assert other.icon().isNull()
+    assert other.font().bold() is False
+
+
+def test_highlight_moves_when_the_song_changes(qapp):
+    panel = QueuePanel()
+    panel.on_track("Song A")
+    panel.on_track("Song B")
+    assert not panel.list.item(1).icon().isNull()
+    panel.on_track("Song C")
+    assert panel.list.item(1).icon().isNull()
+    assert panel.list.item(1).font().bold() is False
+    assert not panel.list.item(2).icon().isNull()
+    assert panel.list.item(2).font().bold() is True
+
+
+def test_scrape_keeps_the_current_row_distinct(qapp):
+    panel = QueuePanel()
+    panel.on_track("Song B", "Performer")
+    panel.set_upcoming(["Song A", "Song B — Performer", "Song C"])
+    assert panel.list.item(1).font().bold() is True
+    assert not panel.list.item(1).icon().isNull()
+    assert panel.list.item(0).icon().isNull()
+    assert panel.list.item(2).icon().isNull()

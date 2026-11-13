@@ -88,8 +88,48 @@ _PLAY_LABEL_WORDS = ("play", "pause", "lecture", "lire", "Écouter")
 # page keeps the playlist name there. navigator.mediaSession.metadata carries
 # the real now-playing song (title/artist) when the page exposes it, so it
 # wins when present.
-NOW_PLAYING_PROBE_JS = (
+#
+# Shuffle/repeat/mute toggles are best-effort: only aria-pressed,
+# aria-checked, or data-pressed style attributes are read (the same known
+# selector patterns as transport clicks, first visible match wins).
+# Anything else yields null, which callers treat as "unknown" and must
+# never overwrite local state with.
+_TOGGLE_PROBE_JS = (
+    "function __amdToggleState(sels){"
+    "for(var k=0;k<sels.length;k++){"
+    "var els=document.querySelectorAll(sels[k]);"
+    "for(var i=0;i<els.length;i++){var b=els[i];"
+    "var r=b.getBoundingClientRect();"
+    "if(r.width<8||r.height<8)continue;"
+    "if(getComputedStyle(b).visibility==='hidden')continue;"
+    "var v=b.getAttribute('aria-pressed');"
+    "if(v===null)v=b.getAttribute('aria-checked');"
+    "if(v===null)v=b.getAttribute('data-pressed');"
+    "if(v===null)continue;"
+    "return v==='true';}"
+    "}return null;}"
+)
+
+_TOGGLE_SELECTORS_JS = json.dumps(
+    {
+        "shuffle": [
+            'button[data-testid*="shuffle" i]',
+            'button[aria-label*="aléatoire" i]',
+            'button[aria-label*="Shuffle" i]',
+        ],
+        "repeat": [
+            'button[data-testid*="repeat" i]',
+            'button[aria-label*="Répéter" i]',
+            'button[aria-label*="Repeat" i]',
+        ],
+    },
+    ensure_ascii=False,
+)
+
+_NOW_PLAYING_TEMPLATE = (
     "(function(){"
+    + _TOGGLE_PROBE_JS
+    + "var tgls=__TOGGLES__;"
     "var a=document.querySelector('audio,video');"
     "var md=(navigator.mediaSession&&navigator.mediaSession.metadata)?navigator.mediaSession.metadata:null;"
     "return JSON.stringify({"
@@ -99,9 +139,13 @@ NOW_PLAYING_PROBE_JS = (
     "dur:a?a.duration:0,"
     "paused:a?(!!a.paused):true,"
     "vol:a?a.volume:1,"
-    "muted:a?(!!a.muted):false});"
+    "muted:a?(!!a.muted):false,"
+    "shuffle:__amdToggleState(tgls.shuffle),"
+    "repeat:__amdToggleState(tgls.repeat)});"
     "})()"
 )
+
+NOW_PLAYING_PROBE_JS = _NOW_PLAYING_TEMPLATE.replace("__TOGGLES__", _TOGGLE_SELECTORS_JS)
 
 # Best-effort scrape of the page's own up-next queue rows. Tests use several
 # naming conventions because Amazon's internals differ per build; an empty
@@ -296,6 +340,15 @@ def parse_probe_result(result: Any) -> dict[str, Any] | None:
         except (TypeError, ValueError):
             return default
 
+    def _opt_bool(value: Any) -> bool | None:
+        # Tri-state: True/False from the page, None when the page exposes
+        # no toggle state (callers must leave local state untouched).
+        if value is True:
+            return True
+        if value is False:
+            return False
+        return None
+
     title = result.get("title")
     volume = min(_float(result.get("vol"), 1.0), 1.0)
     artist = result.get("artist")
@@ -307,6 +360,8 @@ def parse_probe_result(result: Any) -> dict[str, Any] | None:
         "paused": bool(result.get("paused", True)),
         "volume": volume,
         "muted": bool(result.get("muted", False)),
+        "shuffle": _opt_bool(result.get("shuffle", None)),
+        "repeat": _opt_bool(result.get("repeat", None)),
     }
 
 

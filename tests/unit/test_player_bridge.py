@@ -137,7 +137,27 @@ def test_parse_probe_result_valid():
         "paused": False,
         "volume": 1.0,
         "muted": False,
+        "shuffle": None,
+        "repeat": None,
     }
+
+
+def test_parse_probe_result_toggle_tristate():
+    assert parse_probe_result({"shuffle": True, "repeat": False})["shuffle"] is True
+    assert parse_probe_result({"shuffle": True, "repeat": False})["repeat"] is False
+    assert parse_probe_result({"shuffle": "yes"})["shuffle"] is None
+    assert parse_probe_result({})["shuffle"] is None
+    assert parse_probe_result({})["repeat"] is None
+
+
+def test_now_playing_probe_reads_toggle_state():
+    assert "__amdToggleState" in NOW_PLAYING_PROBE_JS
+    assert "shuffle" in NOW_PLAYING_PROBE_JS
+    assert "repeat" in NOW_PLAYING_PROBE_JS
+    # template placeholders must be fully substituted in the shipped probe
+    assert "__TOGGLES__" not in NOW_PLAYING_PROBE_JS
+    assert "__ACTION__" not in NOW_PLAYING_PROBE_JS
+    assert "__SELECTORS__" not in NOW_PLAYING_PROBE_JS
 
 
 def test_parse_probe_result_clamps_volume():

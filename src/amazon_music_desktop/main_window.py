@@ -48,6 +48,11 @@ from .ui.settings_page import SettingsPage
 
 log = get_logger("main_window")
 
+# Toggle buttons whose local checked state must track the page: a click
+# flips the button optimistically, and a missed page action flips it back
+# so the bar never claims a mode the page did not take.
+_TOGGLE_BUTTON_ATTRS = {"shuffle": "shuffle_btn", "repeat": "repeat_btn"}
+
 
 class WebPage(QWebEnginePage):
     def __init__(self, profile, policy, diagnostics=None, parent=None):
@@ -369,24 +374,32 @@ class MainWindow(QMainWindow):
     def _player_js(self, action: str) -> None:
         js = player_action_js(action, self.browser_page.DOCK_PX)
         if js:
+            attr = _TOGGLE_BUTTON_ATTRS.get(action)
+            btn = getattr(self.player_bar, attr, None) if attr else None
             try:
                 self.view.page().runJavaScript(
-                    js, lambda ok, a=action: self._on_action_result(a, ok)
+                    js, lambda ok, a=action, b=btn: self._on_action_result(a, ok, b)
                 )
             except Exception as exc:
                 log.warning("player action %s failed: %s", action, exc)
 
-    def _on_action_result(self, action: str, ok) -> None:
+    def _on_action_result(self, action: str, ok, btn=None) -> None:
         if not ok:
             log.warning("player action %s: no matching control on page", action)
             # observable, and never a false success: the UI state comes from
             # the page probe, not from the action
             self.playback_diagnostics.record_player_action_missed(action)
-        else:
-            # record which dispatch strategy fired (media toggle, selector,
-            # or geometry fallback); playback state still comes from the
-            # monitor, so this is observability, not a success claim
-            self.playback_diagnostics.record_player_action(action, str(ok))
+            if btn is not None and btn.isCheckable():
+                # the click already flipped the toggle: flip it back so a
+                # missed action never leaves a stale mode lit
+                btn.blockSignals(True)
+                btn.setChecked(not btn.isChecked())
+                btn.blockSignals(False)
+            return
+        # record which dispatch strategy fired (media toggle, selector,
+        # or geometry fallback); playback state still comes from the
+        # monitor, so this is observability, not a success claim
+        self.playback_diagnostics.record_player_action(action, str(ok))
 
     def _set_player_volume(self, value: int) -> None:
         try:
