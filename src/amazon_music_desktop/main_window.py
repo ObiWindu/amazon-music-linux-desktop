@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
@@ -15,6 +16,8 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -35,6 +38,13 @@ from .browser.player_bridge import (
     player_action_js,
     seek_js,
     volume_js,
+)
+from .browser.playlist_bridge import (
+    PLAYLIST_SONGS_PROBE_JS,
+    PLAYLISTS_PROBE_JS,
+    parse_playlist_songs_result,
+    parse_playlists_result,
+    play_first_song_js,
 )
 from .browser.profile import ProfileManager
 from .integrations.mpris import MprisService
@@ -89,8 +99,8 @@ def _sidebar_button(text: str, tooltip: str) -> QPushButton:
     b.setFlat(True)
     b.setStyleSheet(
         "QPushButton { text-align: left; padding: 10px 14px; border: none; "
-        "border-radius: 8px; color: #cdd6f4; background: transparent; font-size: 13px; }"
-        "QPushButton:hover { background: #313244; }"
+        "border-radius: 8px; color: #e8e4ff; background: transparent; font-size: 13px; }"
+        "QPushButton:hover { background: #2e2847; }"
         "QPushButton:checked { background: #7c6af7; color: white; }"
     )
     b.setCheckable(True)
@@ -141,6 +151,17 @@ class MainWindow(QMainWindow):
         self._track_artist = ""
         self._encrypted_noted_at = 0.0
         self._last_media_session_state = ""
+        # playlist fetching state: an offscreen page loads playlist URLs so
+        # queuing a playlist never navigates (or stops playback on) the
+        # visible view. A token guards against stale async results.
+        self._fetch_token = 0
+        self._fetch_href = ""
+        self._fetch_pending: tuple[int, Callable[[list[dict[str, str]]], None]] | None = None
+        self._fetch_attempts = 0
+        self._playlist_song_cache: dict[str, list[dict[str, str]]] = {}
+        self._pending_play_href = ""
+        self._play_first_armed = False
+        self._play_first_done = False
 
         # playback observability (remediation spec 3): the monitor normalizes
         # browser media events, the diagnostics collector classifies failures.
@@ -157,36 +178,49 @@ class MainWindow(QMainWindow):
         # sidebar
         sidebar = QFrame()
         sidebar.setFixedWidth(180)
-        sidebar.setStyleSheet("background: #181825; border-right: 1px solid #313244;")
+        sidebar.setStyleSheet("background: #211d33; border-right: 1px solid #3d365e;")
         sb_layout = QVBoxLayout(sidebar)
         sb_layout.setContentsMargins(10, 16, 10, 16)
         sb_layout.setSpacing(4)
 
         title = QLabel("Amazon Music")
-        title.setStyleSheet("color: #cba6f7; font-size: 16px; font-weight: bold; padding: 8px;")
+        title.setStyleSheet("color: #c4b5fd; font-size: 16px; font-weight: bold; padding: 8px;")
         sb_layout.addWidget(title)
 
         self.now_playing = NowPlayingWidget()
         sb_layout.addWidget(self.now_playing)
 
-        self.btn_home = _sidebar_button("🏠  Home", "Home")
-        self.btn_search = _sidebar_button("🔍  Search", "Search")
-        self.btn_library = _sidebar_button("📚  Library", "Library")
-        self.btn_playlists = _sidebar_button("🎵  Playlists", "Playlists")
-        self.btn_favorites = _sidebar_button("❤  Favorites", "Favorites")
-        for b in (self.btn_home, self.btn_search, self.btn_library, self.btn_playlists, self.btn_favorites):
+        # Text-only labels: colorful emoji glyphs clash with the purple
+        # theme (same rule as the vector transport icons in player_bar).
+        self.btn_home = _sidebar_button("Home", "Home")
+        self.btn_search = _sidebar_button("Search", "Search")
+        self.btn_library = _sidebar_button("Library", "Library")
+        self.btn_playlists = _sidebar_button("Playlists", "Playlists — fetches and lists your playlists below")
+        self.btn_favorites = _sidebar_button("Favorites", "Favorites")
+        for b in (self.btn_home, self.btn_search, self.btn_library, self.btn_playlists):
             sb_layout.addWidget(b)
 
+        # user playlists fetched from the page, shown below the Playlists
+        # button. Single click queues all songs, double click clears the
+        # queue, queues the playlist and plays its first song.
+        self.playlist_list = QListWidget()
+        self.playlist_list.setObjectName("playlistList")
+        self.playlist_list.setVisible(False)
+        self.playlist_list.setMaximumHeight(180)
+        sb_layout.addWidget(self.playlist_list)
+
+        sb_layout.addWidget(self.btn_favorites)
+
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #a6adc8; font-size: 11px; padding: 4px 8px;")
+        self.status_label.setStyleSheet("color: #b8aee6; font-size: 11px; padding: 4px 8px;")
         self.status_label.setWordWrap(True)
         sb_layout.addWidget(self.status_label)
 
         sb_layout.addStretch()
 
-        self.btn_settings = _sidebar_button("⚙  Settings", "Settings")
-        self.btn_diagnostics = _sidebar_button("🩺  Diagnostics", "Diagnostics")
-        self.btn_queue = _sidebar_button("📋  Queue", "Queue")
+        self.btn_settings = _sidebar_button("Settings", "Settings")
+        self.btn_diagnostics = _sidebar_button("Diagnostics", "Diagnostics")
+        self.btn_queue = _sidebar_button("Queue", "Queue")
         sb_layout.addWidget(self.btn_settings)
         sb_layout.addWidget(self.btn_diagnostics)
         sb_layout.addWidget(self.btn_queue)
@@ -206,6 +240,12 @@ class MainWindow(QMainWindow):
         self.view.setPage(self.page)
         self.browser_page = _BrowserHost(self.view)
         self.stack.addWidget(self.browser_page)
+
+        # Offscreen page (no view) used to fetch playlist contents: it shares
+        # the profile (so it is authenticated) but loading it never touches
+        # the visible view, so queuing a playlist cannot stop playback.
+        self._fetcher_page = WebPage(self.profile, self.policy, None, self)
+        self._fetcher_page.loadFinished.connect(self._on_fetcher_load_finished)
 
         # settings page
         self.settings_page = SettingsPage(self.config_service.config)
@@ -276,7 +316,9 @@ class MainWindow(QMainWindow):
         self.btn_home.clicked.connect(lambda: self._nav("home"))
         self.btn_search.clicked.connect(lambda: self._nav("search"))
         self.btn_library.clicked.connect(lambda: self._nav("library"))
-        self.btn_playlists.clicked.connect(lambda: self._nav("playlists"))
+        self.btn_playlists.clicked.connect(self.show_playlists)
+        self.playlist_list.itemClicked.connect(self._on_playlist_clicked)
+        self.playlist_list.itemDoubleClicked.connect(self._on_playlist_double_clicked)
         self.btn_favorites.clicked.connect(lambda: self._nav("favorites"))
         self.btn_settings.clicked.connect(self.show_settings)
         self.btn_diagnostics.clicked.connect(self.show_diagnostics)
@@ -352,6 +394,165 @@ class MainWindow(QMainWindow):
 
     def toggle_queue(self):
         self.queue_panel.setVisible(not self.queue_panel.isVisible())
+
+    def show_playlists(self):
+        """Playlists button: open the playlists page and fetch the list below it."""
+        self._nav("playlists")
+        # the SPA renders after load; probe a few times until cards appear
+        for delay in (1500, 4000, 8000):
+            QTimer.singleShot(delay, self._request_playlists)
+
+    def _request_playlists(self):
+        """Scrape the user's playlists from the current page into the sidebar list."""
+        try:
+            self.view.page().runJavaScript(PLAYLISTS_PROBE_JS, self._on_playlists_result)
+        except Exception as exc:
+            log.warning("playlists probe failed: %s", exc)
+
+    def _on_playlists_result(self, result):
+        items = parse_playlists_result(result)
+        if items:
+            self._set_playlists(items)
+
+    def _set_playlists(self, items) -> None:
+        """Rebuild the sidebar playlist list; an unchanged scrape is a no-op."""
+        new = [(str(it.get("name") or ""), str(it.get("href") or "")) for it in items]
+        current = []
+        for index in range(self.playlist_list.count()):
+            row = self.playlist_list.item(index)
+            current.append((row.text(), row.data(Qt.ItemDataRole.UserRole) or ""))
+        if current == new:
+            return
+        self.playlist_list.clear()
+        for name, href in new:
+            item = QListWidgetItem(name)
+            item.setToolTip(href)
+            item.setData(Qt.ItemDataRole.UserRole, href)
+            self.playlist_list.addItem(item)
+        self.playlist_list.setVisible(bool(new))
+
+    def _on_playlist_clicked(self, item) -> None:
+        """Single click on a playlist: add all its songs to the player queue."""
+        href = item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
+        if not href:
+            return
+        name = item.text()
+        self.status_label.setText(f"Fetching songs of {name}…")
+        self._fetch_playlist_songs(href, lambda songs, n=name: self._queue_playlist_songs(n, songs))
+
+    def _on_playlist_double_clicked(self, item) -> None:
+        """Double click: clear the queue, add the playlist, play its first song."""
+        href = item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
+        if not href:
+            return
+        name = item.text()
+        self.status_label.setText(f"Loading {name}…")
+        self._fetch_playlist_songs(href, lambda songs, n=name, h=href: self._play_playlist(n, h, songs))
+
+    def _queue_playlist_songs(self, name: str, songs: list[dict[str, str]]) -> None:
+        if not songs:
+            self.status_label.setText(f"No songs found for {name}")
+            return
+        # from now on the panel is user-managed: the page scrape must not
+        # wipe the queued songs on the next poll
+        self.queue_panel.set_manual_queue(True)
+        added = self.queue_panel.add_songs(songs)
+        self.status_label.setText(f"Added {added} songs from {name} to the queue")
+
+    def _play_playlist(self, name: str, href: str, songs: list[dict[str, str]]) -> None:
+        self.queue_panel.set_manual_queue(True)
+        self.queue_panel.clear_queue()
+        added = self.queue_panel.add_songs(songs)
+        self.status_label.setText(f"Playing {name} ({added} songs queued)")
+        # Playback authority stays the visible page: navigate it to the
+        # playlist, then click the first song once the SPA has rendered.
+        self._pending_play_href = href
+        self._play_first_armed = True
+        self._play_first_done = False
+        self.view.load(QUrl(href))
+
+    def _fetch_playlist_songs(self, href: str, callback) -> None:
+        """Fetch a playlist's songs through the offscreen page (cached by href)."""
+        cached = self._playlist_song_cache.get(href)
+        if cached is not None:
+            callback(cached)
+            return
+        self._fetch_token += 1
+        self._fetch_href = href
+        self._fetch_pending = (self._fetch_token, callback)
+        self._fetch_attempts = 0
+        try:
+            self._fetcher_page.load(QUrl(href))
+        except Exception as exc:
+            log.warning("playlist fetch failed to start: %s", exc)
+            self._fetch_pending = None
+            callback([])
+
+    def _on_fetcher_load_finished(self, ok: bool) -> None:
+        if self._fetch_pending is None:
+            return
+        if not ok:
+            self._deliver_fetch([])
+            return
+        # the SPA renders after load; probe again until track rows appear
+        self._schedule_fetcher_probe(900)
+
+    def _schedule_fetcher_probe(self, delay_ms: int) -> None:
+        QTimer.singleShot(delay_ms, self._run_fetcher_probe)
+
+    def _run_fetcher_probe(self) -> None:
+        pending = self._fetch_pending
+        if pending is None or pending[0] != self._fetch_token:
+            return
+        self._fetch_attempts += 1
+        try:
+            self._fetcher_page.runJavaScript(PLAYLIST_SONGS_PROBE_JS, self._on_fetcher_songs)
+        except Exception as exc:
+            log.warning("playlist songs probe failed: %s", exc)
+            self._deliver_fetch([])
+            return
+        if self._fetch_attempts < 4:
+            self._schedule_fetcher_probe(1600)
+
+    def _on_fetcher_songs(self, result) -> None:
+        pending = self._fetch_pending
+        if pending is None or pending[0] != self._fetch_token:
+            return
+        songs = parse_playlist_songs_result(result)
+        if songs:
+            self._deliver_fetch(songs)
+        elif self._fetch_attempts >= 4:
+            self._deliver_fetch([])
+
+    def _deliver_fetch(self, songs: list[dict[str, str]]) -> None:
+        pending = self._fetch_pending
+        if pending is None:
+            return
+        self._fetch_pending = None
+        if self._fetch_href:
+            self._playlist_song_cache[self._fetch_href] = songs
+        pending[1](songs)
+
+    def _try_play_first_song(self) -> None:
+        """Click the first song of a double-clicked playlist (retried by timers)."""
+        if not self._play_first_armed or self._play_first_done:
+            return
+        url = self.current_url()
+        if self._pending_play_href and not url.startswith(self._pending_play_href.split("?")[0]):
+            self._play_first_armed = False  # user navigated away; give up
+            return
+        try:
+            self.view.page().runJavaScript(
+                play_first_song_js(self.browser_page.DOCK_PX), self._on_play_first_result
+            )
+        except Exception as exc:
+            log.warning("play-first-song failed: %s", exc)
+
+    def _on_play_first_result(self, result) -> None:
+        if result:
+            self._play_first_done = True
+            self._play_first_armed = False
+            self.playback_diagnostics.record_player_action("playlist-play-first", str(result))
 
     def apply_settings(self):
         self.settings_page.apply_to(self.config_service.config)
@@ -458,8 +659,13 @@ class MainWindow(QMainWindow):
         try:
             self.view.page().runJavaScript(NOW_PLAYING_PROBE_JS, self._on_np_result)
             self.view.page().runJavaScript(PLAYBACK_MONITOR_JS, self._on_monitor_state)
-            if self._poll_count == 0 and self.queue_panel.list.isVisible():
-                self.view.page().runJavaScript(QUEUE_PROBE_JS, self._on_queue_result)
+            if self._poll_count == 0:
+                # In manual-queue mode the page scrape must not replace the
+                # user-queued songs; otherwise mirror the page's up-next
+                # queue so the panel is never stale, visible or not.
+                if not self.queue_panel.manual_queue:
+                    self.view.page().runJavaScript(QUEUE_PROBE_JS, self._on_queue_result)
+                self._request_playlists()
         except Exception as exc:
             log.warning("now-playing poll failed: %s", exc)
         if self.monitor.detect_stalled():
@@ -516,7 +722,8 @@ class MainWindow(QMainWindow):
         if state["dur"] > 0 and title:
             # Track-only feed: document.title ("Playlist - Amazon Music") and
             # other page-title junk never reach the queue panel. A song that
-            # merely *loaded* (paused or not) counts.
+            # merely *loaded* (paused or not) counts — so the next playing
+            # song is automatically added to the player queue as it starts.
             self.queue_panel.on_track(title, artist)
         if title and title != self._track_key:
             self._track_key = title
@@ -560,6 +767,17 @@ class MainWindow(QMainWindow):
             self.view.page().runJavaScript(PLAYBACK_MONITOR_JS, self._on_monitor_state)
         except Exception as exc:
             log.warning("playback instrumentation failed: %s", exc)
+        if "playlists" in self.current_url():
+            # playlists index loaded: scrape the playlist cards into the
+            # sidebar list (the SPA renders after loadFinished)
+            for delay in (1500, 4000, 8000):
+                QTimer.singleShot(delay, self._request_playlists)
+        if self._play_first_armed and not self._play_first_done:
+            # a playlist was double-clicked: start its first song once the
+            # page has rendered (a few retries; a no-op once one attempt
+            # lands)
+            for delay in (1200, 2800, 5500):
+                QTimer.singleShot(delay, self._try_play_first_song)
 
     def _on_playback_state_changed(self, state) -> None:
         playing = state == PlaybackState.PLAYING

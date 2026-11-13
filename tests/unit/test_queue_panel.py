@@ -150,3 +150,72 @@ def test_scrape_keeps_the_current_row_distinct(qapp):
     assert not panel.list.item(1).icon().isNull()
     assert panel.list.item(0).icon().isNull()
     assert panel.list.item(2).icon().isNull()
+
+
+def test_add_songs_appends_mixed_forms(qapp):
+    panel = QueuePanel()
+    added = panel.add_songs(
+        [
+            "Plain Song",
+            ("Title Song", "Artist"),
+            {"title": "Dict Song", "artist": "Someone"},
+            {"title": "  "},
+            "",
+            ("", "no title"),
+        ]
+    )
+    assert added == 3
+    assert panel.songs() == ["Plain Song", "Title Song — Artist", "Dict Song — Someone"]
+    assert panel.has_songs() is True
+    assert panel.note.text() == ""
+
+
+def test_add_songs_keeps_current_highlight(qapp):
+    panel = QueuePanel()
+    panel.on_track("Playing Now")
+    panel.add_songs([{"title": "Queued 1", "artist": "A"}, {"title": "Queued 2", "artist": ""}])
+    # the playing row stays highlighted; queued rows are plain
+    assert panel.list.item(0).font().bold() is True
+    assert not panel.list.item(0).icon().isNull()
+    assert panel.list.item(1).font().bold() is False
+    assert panel.list.item(1).icon().isNull()
+    assert panel.songs() == ["Playing Now", "Queued 1 — A", "Queued 2"]
+
+
+def test_clear_queue_empties_and_resets_note(qapp):
+    panel = QueuePanel()
+    panel.on_track("Song A")
+    panel.add_songs(["Song B"])
+    panel.clear_queue()
+    assert panel.songs() == []
+    assert panel.has_songs() is False
+    assert panel.note.text() == "No songs yet — press play"
+    # after a clear, a re-reported song appends fresh (no stale highlight)
+    panel.on_track("Song A")
+    assert panel.songs() == ["Song A"]
+
+
+def test_manual_queue_blocks_scrape_but_not_auto_add(qapp):
+    panel = QueuePanel()
+    panel.set_manual_queue(True)
+    panel.add_songs(["Queued Song"])
+    # page scrape must not wipe the user-queued songs
+    panel.set_upcoming(["Page Song 1", "Page Song 2"])
+    assert panel.songs() == ["Queued Song"]
+    # the next playing song is still added automatically
+    panel.on_track("Next Playing", "Artist")
+    assert panel.songs() == ["Queued Song", "Next Playing — Artist"]
+    assert panel.list.item(1).font().bold() is True
+    # empty scrapes are still fine
+    panel.set_upcoming([])
+    assert panel.songs() == ["Queued Song", "Next Playing — Artist"]
+
+
+def test_manual_queue_off_restores_scrape(qapp):
+    panel = QueuePanel()
+    panel.set_manual_queue(True)
+    panel.add_songs(["Queued"])
+    panel.set_manual_queue(False)
+    panel.set_upcoming(["Page Song"])
+    assert panel.songs() == ["Page Song"]
+    assert panel.manual_queue is False

@@ -13,6 +13,13 @@ when the song changes. Scrapes replace the list but never the current song,
 and re-reporting the current song only re-highlights its row instead of
 appending a duplicate. A scrape that merely repeats the same rows is a
 no-op so the panel does not flicker every poll.
+
+The panel doubles as the app-managed *player queue*: ``add_songs`` appends
+songs without touching the current highlight (used when a playlist is
+clicked), ``clear_queue`` empties it (double-click on a playlist), and
+``on_track`` automatically appends each song as it starts playing. Once
+songs were added manually (``set_manual_queue(True)``) the page scrape no
+longer replaces the list — user-queued songs must survive the poll.
 """
 from __future__ import annotations
 
@@ -78,6 +85,7 @@ class QueuePanel(QFrame):
         self.list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         layout.addWidget(self.list, 1)
         self._current_key = ""
+        self._manual = False
         self._bold = QFont()
         self._bold.setBold(True)
         self._play_icon = _play_icon()
@@ -110,6 +118,51 @@ class QueuePanel(QFrame):
 
     def add_song(self, title: str, artist: str = "") -> None:
         self.on_track(title, artist)
+
+    def set_manual_queue(self, manual: bool) -> None:
+        """Switch between page-scrape mode and user-managed queue mode.
+
+        In manual mode the page's up-next scrape (``set_upcoming``) is a
+        no-op so songs the user queued (e.g. from a playlist click) are
+        never wiped by the poll.
+        """
+        self._manual = bool(manual)
+
+    @property
+    def manual_queue(self) -> bool:
+        return self._manual
+
+    def add_songs(self, songs) -> int:
+        """Append songs to the player queue (e.g. all songs of a playlist).
+
+        Accepts labels (str), ``(title, artist)`` pairs, or
+        ``{"title": ..., "artist": ...}`` dicts. Rows are appended as
+        upcoming entries: the current-song highlight is re-affirmed but no
+        row is treated as playing. Returns the number of rows added.
+        """
+        added = 0
+        for song in songs:
+            title, artist = "", ""
+            if isinstance(song, dict):
+                title = str(song.get("title") or "")
+                artist = str(song.get("artist") or "")
+            elif isinstance(song, (tuple, list)):
+                parts = list(song) + ["", ""]
+                title, artist = str(parts[0] or ""), str(parts[1] or "")
+            else:
+                title = str(song or "")
+            label = track_label(title, artist)
+            if not label:
+                continue
+            item = QListWidgetItem(label)
+            item.setToolTip(label)
+            self.list.addItem(item)
+            added += 1
+        if added:
+            self._highlight_current()
+            self.list.scrollToBottom()
+            self._sync_note()
+        return added
 
     def _current_row_index(self) -> int | None:
         """List index of the now-playing row, or None when not displayed."""
@@ -161,8 +214,11 @@ class QueuePanel(QFrame):
         An empty scrape keeps history. An identical scrape is a no-op
         (only the highlight is re-applied). The current song keeps its
         identity across rebuilds so the next poll tick highlights instead
-        of duplicating.
+        of duplicating. In manual-queue mode (songs were queued by the
+        user, e.g. from a playlist) the scrape never replaces the list.
         """
+        if self._manual:
+            return
         rows = [str(song).strip() for song in songs if str(song).strip()]
         if not rows:
             return  # no usable scrape; keep whatever songs were tracked
@@ -192,3 +248,7 @@ class QueuePanel(QFrame):
         self.list.clear()
         self._current_key = ""
         self._sync_note()
+
+    def clear_queue(self) -> None:
+        """Empty the player queue (double-click on a playlist clears it)."""
+        self.clear_history()
