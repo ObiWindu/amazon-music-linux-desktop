@@ -8,6 +8,7 @@ from PySide6.QtCore import (
     Property,
     QAbstractAnimation,
     QEasingCurve,
+    QPointF,
     QPropertyAnimation,
     QRectF,
     QSequentialAnimationGroup,
@@ -15,7 +16,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractButton,
     QFrame,
@@ -29,9 +30,25 @@ from PySide6.QtWidgets import (
 )
 
 ACCENT = QColor("#7c6af7")
-IDLE = QColor("#cdd6f4")
-HOVER = QColor("#313244")
-PRESSED = QColor("#45475a")
+ACCENT_LIGHT = QColor("#c4b5fd")
+ACCENT_DIM = QColor("#3b3363")
+IDLE = QColor("#e8e4ff")
+HOVER = QColor("#2e2847")
+PRESSED = QColor("#3b3363")
+
+# Emoji glyphs are kept as stable identifiers (tests + state logic rely on
+# them) but never painted directly — colorful emoji clash with the purple
+# theme. Each glyph maps to a vector icon drawn in theme colors.
+_GLYPH_TO_ICON = {
+    "▶": "play",
+    "⏸": "pause",
+    "⏮": "prev",
+    "⏭": "next",
+    "🔀": "shuffle",
+    "🔁": "repeat",
+    "🔊": "volume",
+    "🔇": "mute",
+}
 
 
 def format_time(seconds: float) -> str:
@@ -47,14 +64,8 @@ def clamp01(value: float) -> float:
     return float(value)
 
 
-def _scaled_font(size: int = 14, scale: float = 1.0):
-    font = QWidget().font()
-    font.setPointSize(int(size * max(0.6, min(scale, 1.25))))
-    return font
-
-
 class TransportButton(QAbstractButton):
-    """Emoji transport button with hover fill, press 'pop' and play pulse."""
+    """Vector transport button in theme purple: hover fill, press 'pop', play pulse."""
 
     def __init__(self, glyph: str, tooltip: str, *, toggle: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -136,39 +147,143 @@ class TransportButton(QAbstractButton):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(0.0, 0.0, float(self.width()), float(self.height()))
         radius = (rect.height() / 2 - 4) * max(0.6, min(self._scale, 1.25))
+        center = rect.center()
 
         if self.isDown():
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(PRESSED)
-            p.drawEllipse(rect.center(), radius, radius)
+            p.drawEllipse(center, radius, radius)
         elif self.underMouse():
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(HOVER)
-            p.drawEllipse(rect.center(), radius, radius)
-
-        if self.isChecked():
-            halo = QColor(ACCENT)
-            halo.setAlpha(70)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(halo)
-            p.drawEllipse(rect.center(), radius, radius)
-        elif self._playing and not self.isDown():
-            pen_color = QColor(ACCENT)
-            pen_color.setAlpha(int(90 + 110 * abs(math.sin(self._phase * 0.26))))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(pen_color))
-            p.drawEllipse(rect.center(), radius + 3, radius + 3)
+            p.drawEllipse(center, radius, radius)
 
         checked = self.isChecked()
-        p.setFont(_scaled_font(scale=self._scale))
-        text_color = QColor(ACCENT if checked else IDLE)
-        p.setPen(QPen(text_color))
-        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, self._glyph)
+        if checked:
+            halo = QColor(ACCENT)
+            halo.setAlpha(56)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(halo)
+            p.drawEllipse(center, radius, radius)
+            ring = QColor(ACCENT)
+            ring.setAlpha(140)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(ring, 1.2))
+            p.drawEllipse(center, radius - 0.6, radius - 0.6)
+        elif self._playing and not self.isDown():
+            pen_color = QColor(ACCENT_LIGHT)
+            pen_color.setAlpha(int(90 + 110 * abs(math.sin(self._phase * 0.26))))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(pen_color, 1.4))
+            p.drawEllipse(center, radius + 3, radius + 3)
+
+        icon_color = QColor(ACCENT_LIGHT if checked else IDLE)
+        if self.isDown():
+            icon_color = QColor("#ffffff")
+        self._draw_icon(p, _GLYPH_TO_ICON.get(self._glyph, "play"), center, self._scale, icon_color)
 
         if checked:
             p.setPen(Qt.PenStyle.NoPen)
             p.fillRect(int(rect.width() / 2 - 9), self.height() - 5, 18, 3, ACCENT)
         p.end()
+
+    @staticmethod
+    def _draw_icon(p: QPainter, kind: str, center, scale: float, color: QColor) -> None:
+        """Paint a monochrome transport glyph in theme colors."""
+        s = max(0.6, min(scale, 1.25))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(color)
+        cx, cy = center.x(), center.y()
+        u = 1.6 * s  # base unit
+
+        if kind == "play":
+            p.drawPolygon(
+                QPolygonF(
+                    [
+                        QPointF(cx - 3.2 * u, cy - 4.6 * u),
+                        QPointF(cx + 4.4 * u, cy),
+                        QPointF(cx - 3.2 * u, cy + 4.6 * u),
+                    ]
+                )
+            )
+        elif kind == "pause":
+            w = 2.4 * u
+            h = 8.4 * u
+            p.drawRects(
+                [
+                    QRectF(cx - 3.6 * u, cy - h / 2, w, h),
+                    QRectF(cx + 1.2 * u, cy - h / 2, w, h),
+                ]
+            )
+        elif kind in ("prev", "next"):
+            flip = -1.0 if kind == "prev" else 1.0
+            # stem bar
+            bar_w = 1.8 * u
+            bar_h = 8.4 * u
+            bar_x = cx - 5.4 * u if kind == "prev" else cx + 3.6 * u
+            p.drawRect(QRectF(bar_x, cy - bar_h / 2, bar_w, bar_h))
+            p.drawPolygon(
+                QPolygonF(
+                    [
+                        QPointF(cx - flip * 3.0 * u, cy - 4.6 * u),
+                        QPointF(cx + flip * 4.6 * u, cy),
+                        QPointF(cx - flip * 3.0 * u, cy + 4.6 * u),
+                    ]
+                )
+            )
+        elif kind in ("shuffle", "repeat"):
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            pen = QPen(color, 1.7 * s, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            # two crossing lanes
+            for y0, y1 in ((-3.2 * u, 3.2 * u), (3.2 * u, -3.2 * u)):
+                p.drawLine(QPointF(cx - 5.2 * u, cy + y0), QPointF(cx - 1.0 * u, cy + y0))
+                p.drawLine(QPointF(cx + 1.0 * u, cy + y1), QPointF(cx + 5.2 * u, cy + y1))
+                p.drawLine(QPointF(cx - 1.0 * u, cy + y0), QPointF(cx + 1.0 * u, cy + y1))
+            # arrowheads on the right
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(color)
+            for dy in (-3.2 * u, 3.2 * u):
+                tip = QPointF(cx + 5.2 * u, cy + dy)
+                p.drawPolygon(
+                    QPolygonF(
+                        [
+                            tip,
+                            QPointF(tip.x() - 3.0 * u, tip.y() - 1.8 * u),
+                            QPointF(tip.x() - 3.0 * u, tip.y() + 1.8 * u),
+                        ]
+                    )
+                )
+            if kind == "repeat":
+                # small loop tick underneath to distinguish repeat from shuffle
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.setPen(QPen(color, 1.4 * s, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+                p.drawArc(QRectF(cx - 5.2 * u, cy + 4.4 * u, 10.4 * u, 3.2 * u), 200 * 16, 140 * 16)
+        else:  # volume / mute
+            # speaker body
+            p.drawPolygon(
+                QPolygonF(
+                    [
+                        QPointF(cx - 5.4 * u, cy - 2.2 * u),
+                        QPointF(cx - 2.4 * u, cy - 2.2 * u),
+                        QPointF(cx + 0.4 * u, cy - 4.8 * u),
+                        QPointF(cx + 0.4 * u, cy + 4.8 * u),
+                        QPointF(cx - 2.4 * u, cy + 2.2 * u),
+                        QPointF(cx - 5.4 * u, cy + 2.2 * u),
+                    ]
+                )
+            )
+            if kind == "volume":
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.setPen(QPen(color, 1.5 * s, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+                p.drawArc(QRectF(cx - 0.5 * u, cy - 3.4 * u, 4.6 * u, 6.8 * u), -55 * 16, 110 * 16)
+                p.drawArc(QRectF(cx + 0.6 * u, cy - 5.4 * u, 7.4 * u, 10.8 * u), -55 * 16, 110 * 16)
+            else:
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.setPen(QPen(color, 1.7 * s, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+                d = 3.4 * u
+                p.drawLine(QPointF(cx + 2.2 * u, cy - d), QPointF(cx + 6.4 * u, cy + d))
+                p.drawLine(QPointF(cx + 2.2 * u, cy + d), QPointF(cx + 6.4 * u, cy - d))
 
     def enterEvent(self, event) -> None:
         super().enterEvent(event)

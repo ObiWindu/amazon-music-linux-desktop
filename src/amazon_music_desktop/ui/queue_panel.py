@@ -56,20 +56,25 @@ def _row_key(text: str) -> str:
 class QueuePanel(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("queuePanel")
         self.setFixedWidth(240)
-        self.setStyleSheet("background: #181825; border-left: 1px solid #313244;")
+        self.setStyleSheet("background: #211d33; border-left: 1px solid #3d365e;")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 16, 10, 16)
         header = QLabel("Queue")
-        header.setStyleSheet(f"color: {ACCENT}; font-size: 16px; font-weight: bold;")
+        header.setObjectName("queueHeader")
+        header.setStyleSheet("color: #c4b5fd; font-size: 16px; font-weight: bold;")
         layout.addWidget(header)
         self.note = QLabel("No songs yet — press play")
-        self.note.setStyleSheet("color: #a6adc8; font-size: 11px;")
+        self.note.setObjectName("queueNote")
+        self.note.setStyleSheet("color: #b8aee6; font-size: 11px;")
         self.note.setWordWrap(True)
         layout.addWidget(self.note)
         self.list = QListWidget()
         self.list.setObjectName("queueList")
-        self.list.setStyleSheet("background: #1e1e2e; color: #cdd6f4; border: none;")
+        self.list.setStyleSheet(
+            "background: #221d38; color: #e8e4ff; border: none; outline: none;"
+        )
         self.list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         layout.addWidget(self.list, 1)
         self._current_key = ""
